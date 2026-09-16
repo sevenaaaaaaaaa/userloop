@@ -36,7 +36,7 @@ else
 fi
 
 # ─── 3. 打包同步服务器 ───
-step "3/6 服务器同步（$HOST:$APP_DIR）"
+step "3/6 服务器同步（${HOST}:${APP_DIR}）"
 TAR=/tmp/userloop-sync.tar.gz
 tar czf "$TAR" \
   --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
