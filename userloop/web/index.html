@@ -3,92 +3,250 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UserLoop 控制台</title>
-<style>
-  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950;--cyan:#58a6ff;--amber:#d29922;--red:#f85149}
-  *{box-sizing:border-box;margin:0}
-  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"PingFang SC",sans-serif;padding:24px}
-  h1{font-size:18px;margin-bottom:4px}
-  .sub{color:var(--dim);font-size:12px;margin-bottom:20px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
-  .panel h2{font-size:13px;color:var(--dim);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em}
-  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;margin-bottom:16px}
-  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
-  .kpi b{display:block;font-size:22px}
-  .kpi span{color:var(--dim);font-size:11px}
-  .bar{display:flex;align-items:center;gap:8px;margin:6px 0}
-  .bar .label{width:90px;color:var(--dim);font-size:12px}
-  .bar .track{flex:1;background:#21262d;border-radius:4px;height:16px;overflow:hidden}
-  .bar .fill{height:100%;background:var(--cyan)}
-  .bar .n{width:40px;text-align:right;font-size:12px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{color:var(--dim);text-align:left;font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line)}
-  td{padding:6px 8px;border-bottom:1px solid #21262d;vertical-align:top}
-  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;border:1px solid var(--line)}
-  .s-running{color:var(--cyan)} .s-verifying{color:var(--amber)} .s-verified{color:var(--green)} .s-failed{color:var(--red)}
-  .v-effective{color:var(--green)} .v-neutral{color:var(--dim)}
-  .refresh{float:right;color:var(--dim);font-size:12px;cursor:pointer}
-</style>
+<title>运营总览 | UserLoop 运营台</title>
+<link rel="stylesheet" href="static/ui.css">
+<script>try{var t=localStorage.getItem('ul_theme');if(t==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}</script>
 </head>
 <body>
-<h1>UserLoop <span class="tag">全域自动化用户运营</span><a class="refresh" href="canvas" style="text-decoration:none">▦ 画布编排</a><span class="refresh" onclick="load()">⟳ 刷新</span></h1>
-<div class="sub">全用户旅程自动形成 Loop：事件 → 旅程 → 断点 → Loop → 动作 → 验证回流</div>
+<header id="chrome">
+  <div class="bar">
+    <div class="bar-start">
+      <button class="chip act" onclick="document.getElementById('sidebar').classList.toggle('open')" title="菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="brand"><span class="dot"></span>UserLoop<span class="bn-sub">全域运营台</span></div>
+    </div>
+    <div class="bar-center">
+      <button class="searchbox" onclick="document.getElementById('sec-events').scrollIntoView({behavior:'smooth'})">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        查看实时事件流 / 旅程迁移
+        <kbd>实时</kbd>
+      </button>
+    </div>
+    <div class="bar-end">
+      <span class="chip"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span><span id="live-state">调度运行中</span></span>
+      <button class="chip act" onclick="toggleTheme()" title="切换主题">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
+      </button>
+      <span class="chip" id="me-chip" title="当前登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg><span id="me-name">—</span></span>
+      <button class="chip act" onclick="logout()" title="退出登录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 12H4m0 0 4-4m-4 4 4 4"/><path d="M14 4h5v16h-5"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
 
-<div class="kpis" id="kpis"></div>
+<div id="app">
+  <nav id="sidebar">
+    <div class="sb-grp">运营</div>
+    <a class="nv on" href="#sec-overview" data-sec="sec-overview">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="10" width="8" height="11" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/></svg>
+      总览
+    </a>
+    <a class="nv" href="#sec-journey" data-sec="sec-journey">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h4V9H4zM10 19h4V4h-4zM16 19h4v-7h-4z"/></svg>
+      旅程漏斗
+    </a>
+    <a class="nv" href="#sec-loops" data-sec="sec-loops">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 2v6h-6"/><path d="M7 22v-6h6"/><path d="M20 8a8 8 0 0 0-13.7-4.7L4 6"/><path d="M4 16a8 8 0 0 0 13.7 4.7L20 18"/></svg>
+      Loop 运行
+      <span class="bd" id="bd-loops"></span>
+    </a>
+    <a class="nv" href="#sec-users" data-sec="sec-users">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1.2-3.5 4-5 6.5-5s5.3 1.5 6.5 5"/><path d="M16 7.5a3 3 0 1 1 3 4.5"/></svg>
+      用户档案
+      <span class="bd" id="bd-users"></span>
+    </a>
+    <a class="nv" href="#sec-events" data-sec="sec-events">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 8-4-16-3 8H2"/></svg>
+      事件流
+    </a>
+    <div class="sb-grp">编排</div>
+    <a class="nv" href="canvas">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="9" width="6" height="6" rx="1.5"/><path d="M9 6h3a3 3 0 0 1 3 3v0"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/></svg>
+      画布编排
+    </a>
+    <div class="sb-foot">
+      数据流：埋点/电商/广告/MA → 旅程断点 → Loop → 触达 → 验证回流<br>
+      <span class="mono" id="sb-meta">—</span>
+    </div>
+  </nav>
 
-<div class="grid">
-  <div class="panel"><h2>旅程漏斗</h2><div id="funnel"></div></div>
-  <div class="panel"><h2>Loop 状态</h2><div id="loopstatus"></div></div>
-  <div class="panel"><h2>模板效果（验证回流）</h2><table><thead><tr><th>模板</th><th>effective</th><th>neutral</th></tr></thead><tbody id="tstats"></tbody></table></div>
-  <div class="panel"><h2>最近旅程迁移</h2><table><thead><tr><th>用户</th><th>迁移</th><th>原因</th><th>时间</th></tr></thead><tbody id="transitions"></tbody></table></div>
-  <div class="panel"><h2>最近 Loop</h2><table><thead><tr><th>ID</th><th>模板</th><th>状态</th><th>动作</th></tr></thead><tbody id="loops"></tbody></table></div>
-  <div class="panel"><h2>最近事件</h2><table><thead><tr><th>用户</th><th>事件</th><th>来源</th><th>时间</th></tr></thead><tbody id="events"></tbody></table></div>
+  <main>
+    <div class="page-head">
+      <h1>运营总览</h1>
+      <div class="sub">用户旅程自动形成 Loop · 全域数据中枢</div>
+      <div class="sp"></div>
+      <button class="btn ghost sm" onclick="load()">立即刷新</button>
+      <span class="tag mono" id="ts">—</span>
+    </div>
+
+    <section id="sec-overview">
+      <div class="kpi-grid" id="kpis"></div>
+
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>旅程漏斗</h3><span class="p-sub" id="funnel-sub">各阶段用户数 / 转化率</span></div>
+          <div class="p-body"><div class="funnel" id="funnel"></div></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>Loop 状态</h3><span class="p-sub">运行 / 验证 / 完成</span></div>
+          <div class="p-body"><div class="funnel" id="loopstatus"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-journey">
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>模板效果（验证回流）</h3><span class="p-sub">哪类运营 Loop 真的有效</span></div>
+          <div class="p-body">
+            <table><thead><tr><th>模板</th><th>说明</th><th>effective</th><th>neutral</th><th>有效率</th></tr></thead><tbody id="tstats"></tbody></table>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>最近旅程迁移</h3><span class="p-sub">阶段跃迁 / 断点</span></div>
+          <div class="p-body">
+            <table><thead><tr><th>用户</th><th>迁移</th><th>原因</th><th>时间</th></tr></thead><tbody id="transitions"></tbody></table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-loops">
+      <div class="panel">
+        <div class="p-head"><h3>最近 Loop</h3><span class="p-sub">断点自动生成的运营动作</span></div>
+        <div class="p-body">
+          <table><thead><tr><th>Loop</th><th>模板</th><th>触发</th><th>状态</th><th>动作</th><th>创建</th></tr></thead><tbody id="loops"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-users">
+      <div class="panel">
+        <div class="p-head"><h3>用户档案（CDP）</h3><span class="p-sub">最近活跃用户</span></div>
+        <div class="p-body">
+          <table><thead><tr><th>ID</th><th>邮箱</th><th>阶段</th><th>购买</th><th>事件数</th><th>最近活跃</th></tr></thead><tbody id="users"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-events">
+      <div class="panel">
+        <div class="p-head"><h3>实时事件流</h3><span class="p-sub">all sources · 30s 自动刷新</span></div>
+        <div class="p-body"><div class="feed" id="events"></div></div>
+      </div>
+    </section>
+  </main>
 </div>
+<div id="toast"></div>
 
 <script>
-const fmt = s => (s||'').replace('T',' ').slice(0,19);
-async function j(url){ const r = await fetch(url); return r.json(); }
+const $ = id => document.getElementById(id);
+const fmt = s => (s || '').replace('T', ' ').slice(0, 19);
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
+function toggleTheme(){
+  const root=document.documentElement, dark=root.getAttribute('data-theme')==='dark';
+  if(dark){root.removeAttribute('data-theme');localStorage.setItem('ul_theme','light');}
+  else{root.setAttribute('data-theme','dark');localStorage.setItem('ul_theme','dark');}
+}
+async function logout(){ await fetch('api/logout',{method:'POST'}); location.reload(); }
+async function j(url){ const r = await fetch(url); if(r.status===401){location.reload();return {};} return r.json(); }
 
-function bar(label, value, max, color){
+const STAGE_LABEL={visitor:'访客',signup:'已注册',activated:'已激活',paying:'已付费',retained:'复购',advocate:'推荐者',churn_risk:'流失风险',churned:'已流失'};
+function bar(label,value,max,extra){
   const pct = max>0 ? Math.round(value/max*100) : 0;
-  return `<div class="bar"><div class="label">${label}</div><div class="track"><div class="fill" style="width:${pct}%;background:${color||'var(--cyan)'}"></div></div><div class="n">${value}</div></div>`;
+  return `<div class="fn-row"><div class="fn-l">${label}</div><div class="fn-t"><div class="fn-f" style="width:${pct}%"></div></div><div class="fn-n">${value}</div></div>${extra?`<div class="fn-row"><div class="fn-l"></div><div class="fn-t" style="height:auto;background:none"><span class="fn-rate">${extra}</span></div><div></div></div>`:''}`;
 }
 
 async function load(){
-  const [d, loops, events] = await Promise.all([
-    j('/api/v1/dashboard'), j('/api/v1/loops?limit=20'), j('/api/v1/events?limit=12')
+  const [d, loops, events, users, me] = await Promise.all([
+    j('api/v1/dashboard'), j('api/v1/loops?limit=12'), j('api/v1/events?limit=14'), j('api/v1/users?limit=12'), j('api/auth/me')
   ]);
-  const c = d.counts||{};
-  document.getElementById('kpis').innerHTML =
-    `<div class="kpi"><b>${c.users??0}</b><span>用户</span></div>
-     <div class="kpi"><b>${c.events??0}</b><span>事件</span></div>
-     <div class="kpi"><b>${c.loops??0}</b><span>Loops</span></div>
-     <div class="kpi"><b>${c.actions??0}</b><span>动作</span></div>
-     <div class="kpi"><b>${c.feedback??0}</b><span>回流</span></div>`;
+  $('me-name').textContent = me.name || me.username || '—';
+  $('me-chip').title = (me.name||'') + ' · ' + (me.role||'');
+  $('ts').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false});
 
-  const max = Math.max(1, ...(d.funnel||[]).map(f=>f.users));
-  const colors = {visitor:'#8b949e',signup:'#58a6ff',activated:'#1f6feb',paying:'#3fb950',retained:'#26a641',advocate:'#d29922'};
-  document.getElementById('funnel').innerHTML =
-    (d.funnel||[]).map(f=>bar(f.stage,f.users,max,colors[f.stage])).join('');
+  const c = d.counts || {};
+  const stages = d.stages || {};
+  const total = Object.values(stages).reduce((a,b)=>a+b,0);
+  $('bd-loops').textContent = c.loops ?? '';
+  $('bd-users').textContent = c.users ?? '';
+  $('sb-meta').textContent = `users ${c.users??0} · events ${c.events??0} · loops ${c.loops??0} · feedback ${c.feedback??0}`;
 
-  document.getElementById('loopstatus').innerHTML =
-    Object.entries(d.loop_status||{}).map(([k,v])=>bar(k,v,Math.max(1,...Object.values(d.loop_status||{a:1})))).join('');
+  const conv = k => total? Math.round((stages[k]||0)/total*100)+'%' : '—';
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="k-label">Users</div><div class="k-val">${c.users??0}</div><div class="k-sub">CDP 档案 · 付费 ${stages.paying||0}</div></div>
+    <div class="kpi"><div class="k-label">Events</div><div class="k-val">${c.events??0}</div><div class="k-sub">全域行为事件</div></div>
+    <div class="kpi"><div class="k-label">Loops</div><div class="k-val">${c.loops??0}</div><div class="k-sub">自动生成 · 动作 ${c.actions??0}</div></div>
+    <div class="kpi"><div class="k-label">验证回流</div><div class="k-val">${c.feedback??0}</div><div class="k-sub">effective / neutral 统计</div></div>
+    <div class="kpi"><div class="k-label">付费转化</div><div class="k-val">${conv('paying')}</div><div class="k-sub">paying / 全部用户</div></div>`;
 
-  document.getElementById('tstats').innerHTML = Object.entries(d.template_stats||{})
-    .map(([tid,v])=>`<tr><td>${tid}</td><td class="v-effective">${v.effective??0}</td><td class="v-neutral">${v.neutral??0}</td></tr>`).join('') || '<tr><td colspan=3 style="color:var(--dim)">暂无回流数据</td></tr>';
+  const fmax = Math.max(1, ...(d.funnel||[]).map(f=>f.users));
+  let prev = null;
+  $('funnel').innerHTML = (d.funnel||[]).map(f=>{
+    const rate = prev!==null && prev>0 ? `转化 ${Math.round(f.users/prev*100)}%` : '';
+    const html = bar(STAGE_LABEL[f.stage]||f.stage, f.users, fmax, rate);
+    prev = f.users; return html;
+  }).join('');
+  $('funnel-sub').textContent = `总用户 ${total} · 付费率 ${conv('paying')}`;
 
-  document.getElementById('transitions').innerHTML = (d.recent_transitions||[])
-    .map(t=>`<tr><td class="tag">${t.user_id.slice(0,14)}</td><td>${t.from_stage} → <b>${t.to_stage}</b></td><td style="color:var(--dim)">${t.reason}</td><td style="color:var(--dim)">${fmt(t.created_at)}</td></tr>`).join('') || '<tr><td colspan=4 style="color:var(--dim)">暂无</td></tr>';
+  const ls = d.loop_status||{};
+  const lmax = Math.max(1, ...Object.values(ls));
+  $('loopstatus').innerHTML = Object.entries(ls).map(([k,v])=>bar(k, v, lmax)).join('') ||
+    '<div style="color:var(--faint);font-size:var(--fs-md)">暂无 Loop 运行</div>';
 
-  document.getElementById('loops').innerHTML = (loops.loops||[])
-    .map(l=>`<tr><td>${l.id.slice(0,16)}</td><td>${l.template_id}</td><td class="s-${l.status}">${l.status}</td><td style="color:var(--dim)">${(l.actions||[]).map(a=>a.type+'/'+a.status).join(' · ')}</td></tr>`).join('') || '<tr><td colspan=4 style="color:var(--dim)">暂无</td></tr>';
+  const tstats = d.template_stats||{};
+  const names = {}; (loops.loops||[]).forEach(l=>{ if(l.template) names[l.template_id]=l.template.name; });
+  const rows = Object.entries(tstats).map(([tid,v])=>{
+    const e=v.effective||0, n=v.neutral||0, tot=e+n;
+    const rate = tot? Math.round(e/tot*100)+'%' : '—';
+    return `<tr><td class="mono">${tid}</td><td style="color:var(--muted)">${names[tid]||'—'}</td>
+      <td class="v-effective">${e}</td><td class="v-neutral">${n}</td><td class="mono">${rate}</td></tr>`;
+  }).join('');
+  $('tstats').innerHTML = rows || '<tr><td colspan="5" style="color:var(--faint)">暂无回流数据（Loop 验证窗口到期后产生）</td></tr>';
 
-  document.getElementById('events').innerHTML = (events.events||[])
-    .map(e=>`<tr><td>${e.distinct_id}</td><td class="tag">${e.event}</td><td style="color:var(--dim)">${e.source}</td><td style="color:var(--dim)">${fmt(e.created_at)}</td></tr>`).join('');
+  $('transitions').innerHTML = (d.recent_transitions||[]).map(t=>`
+    <tr><td class="mono">${(t.user_id||'').slice(0,12)}</td>
+    <td>${STAGE_LABEL[t.from_stage]||t.from_stage} → <b>${STAGE_LABEL[t.to_stage]||t.to_stage}</b></td>
+    <td style="color:var(--muted)">${t.reason||''}</td><td class="mono" style="color:var(--faint)">${fmt(t.created_at)}</td></tr>`).join('')
+    || '<tr><td colspan="4" style="color:var(--faint)">暂无迁移</td></tr>';
+
+  $('loops').innerHTML = (loops.loops||[]).map(l=>{
+    const trig = l.trigger && l.trigger.event ? l.trigger.event : (l.trigger && l.trigger.stage ? '→'+l.trigger.stage : (l.trigger && l.trigger.days ? l.trigger.days+'d 无事件' : (l.trigger&&l.trigger.type)||'—'));
+    const acts = (l.actions||[]).map(a=>`<span class="tag mono s-${a.status}">${a.type}</span>`).join(' ');
+    return `<tr><td class="mono">${(l.id||'').slice(0,14)}</td><td>${l.template?l.template.name:l.template_id}</td>
+      <td class="tag mono">${trig}</td><td class="s-${l.status}">${l.status}</td><td>${acts}</td>
+      <td class="mono" style="color:var(--faint)">${fmt(l.created_at)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--faint)">暂无 Loop</td></tr>';
+
+  $('users').innerHTML = (users.users||[]).map(u=>{
+    const st=u.stats||{};
+    return `<tr><td class="mono">${u.distinct_id}</td><td>${u.email||'—'}</td>
+      <td><span class="tag ${u.stage==='paying'||u.stage==='retained'||u.stage==='advocate'?'ok':u.stage==='visitor'?'':'accent'}">${STAGE_LABEL[u.stage]||u.stage}</span></td>
+      <td class="mono">${st.purchases||0}</td><td class="mono">${st.event_count||0}</td>
+      <td class="mono" style="color:var(--faint)">${fmt(u.last_seen)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--faint)">暂无用户</td></tr>';
+
+  $('events').innerHTML = (events.events||[]).map(e=>`
+    <div class="row"><div class="ic">${(e.source||'·').slice(0,2)}</div>
+      <div class="b"><div class="t">${e.event}</div><div class="d">${e.distinct_id}</div></div>
+      <div class="tm">${fmt(e.created_at)}</div></div>`).join('')
+    || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
 
   setTimeout(load, 30000);
 }
+
+// 侧栏高亮
+const secs=[...document.querySelectorAll('main section[id]')];
+const obs=new IntersectionObserver(es=>{
+  es.forEach(e=>{ if(e.isIntersecting){ document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.classList.toggle('on', a.dataset.sec===e.target.id)); }});
+},{rootMargin:'-20% 0px -70% 0px'});
+secs.forEach(s=>obs.observe(s));
+document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.addEventListener('click',()=>{
+  document.getElementById('sidebar').classList.remove('open');
+}));
+
 load();
 </script>
 </body>
