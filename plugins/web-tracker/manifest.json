@@ -1,0 +1,12 @@
+{
+  "id": "web-tracker",
+  "type": "source",
+  "name": "UserLoop 旅程埋点采集",
+  "version": "1.0.0",
+  "description": "零依赖 JS 埋点脚本：自动采集 page_view / element_click，批量上报 /api/v1/track，走事件总线进入 CDP 建档与旅程重建",
+  "permissions": ["http"],
+  "config": {
+    "endpoint": {"desc": "上报端点（默认 /api/v1/track）", "required": false},
+    "auto_collect": {"desc": "自动采集 page_view 与 element_click", "required": false}
+  }
+}

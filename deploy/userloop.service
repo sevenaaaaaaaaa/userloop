@@ -1,0 +1,15 @@
+[Unit]
+Description=UserLoop - 全域自动化用户运营工具
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/www/wwwroot/userloop
+Environment=USERLOOP_PREFIX=/userloop
+Environment=USERLOOP_DATA=/www/wwwroot/userloop/data
+ExecStart=/www/wwwroot/userloop/.venv/bin/userloop serve --host 127.0.0.1 --port 8600
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

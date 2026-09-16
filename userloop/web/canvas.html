@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UserLoop 画布编排</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;--cyan:#58a6ff;--green:#3fb950;--amber:#d29922;--red:#f85149;--purple:#bc8cff}
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"PingFang SC",sans-serif;padding:24px}
+  h1{font-size:18px;margin-bottom:4px}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:16px}
+  .top{display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+  select,button{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer}
+  button.primary{background:#1f6feb;border-color:#1f6feb}
+  button:hover{filter:brightness(1.2)}
+  .layout{display:grid;grid-template-columns:1fr 380px;gap:16px}
+  @media(max-width:1100px){.layout{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .panel h2{font-size:13px;color:var(--dim);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em}
+  svg .edge{stroke:#4a5568;stroke-width:1.6;fill:none;marker-end:url(#arrow)}
+  .edge-label{fill:var(--dim);font-size:11px}
+  .node rect{rx:8;stroke-width:1.5}
+  .node text{fill:var(--fg);font-size:12px}
+  .node .ntype{fill:var(--dim);font-size:10px}
+  .t-trigger rect{stroke:#d29922;fill:#2b2416}
+  .t-condition rect{stroke:#bc8cff;fill:#241b2e}
+  .t-action rect{stroke:#3fb950;fill:#122619}
+  .t-delay rect{stroke:#58a6ff;fill:#0f1e33}
+  .t-exit rect{stroke:#8b949e;fill:#1a1f26}
+  textarea{width:100%;height:420px;background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px/1.5 ui-monospace,Menlo,monospace;resize:vertical}
+  .runs{margin-top:8px}
+  .run{border-bottom:1px solid #21262d;padding:8px 0;font-size:12px}
+  .run .st-running{color:var(--cyan)} .run .st-waiting{color:var(--amber)} .run .st-done{color:var(--green)}
+  .trace{color:var(--dim);margin-top:4px;line-height:1.6}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1f6feb;color:#fff;padding:8px 18px;border-radius:8px;display:none;font-size:13px}
+</style>
+</head>
+<body>
+<h1>UserLoop 画布编排 <a href="../" style="float:right;color:var(--dim);font-size:13px;text-decoration:none">← 返回看板</a></h1>
+<div class="sub">nodes/edges 图执行：trigger → condition(true/false 分支) → action → delay(定时恢复) → exit ｜ 借鉴 OpenFlow CanvasSystem</div>
+
+<div class="top">
+  <select id="flowSel" onchange="loadFlow()"></select>
+  <button onclick="runTest()">▶ 测试触发</button>
+  <button id="saveBtn" class="button" onclick="save()">保存</button>
+  <span id="flowMeta" style="color:var(--dim);font-size:12px"></span>
+</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>画布预览（自动分层布局）</h2>
+    <div id="canvasWrap"></div>
+    <h2 style="margin-top:14px">最近执行 Runs</h2>
+    <div class="runs" id="runs"></div>
+  </div>
+  <div class="panel">
+    <h2>Flow JSON（编辑后保存生效）</h2>
+    <textarea id="flowJson" spellcheck="false"></textarea>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let flows = [];
+
+async function init(){
+  const r = await (await fetch('api/v1/canvas')).json();
+  flows = r.flows || [];
+  $('flowSel').innerHTML = flows.map(f=>`<option value="${f.id}">${f.name||f.id}${f.enabled===false?' (停用)':''}</option>`).join('');
+  if (flows.length) loadFlow();
+}
+
+function loadFlow(f){
+  $('flowMeta').textContent = (f.description||'');
+  $('flowJson').value = JSON.stringify(f, null, 2);
+  render(f);
+  loadRuns(f.id);
+}
+
+async function loadFlow(){
+  const id = $('flowSel').value;
+  const r = await (await fetch(`api/v1/canvas/${id}`)).json();
+  if (r.flow) loadFlowObj(r.flow);
+}
+
+function loadFlowObj(f){
+  $('flowMeta').textContent = f.description || '';
+  $('flowJson').value = JSON.stringify(f, null, 2);
+  render(f);
+  loadRuns(f.id);
+}
+
+// ---- 自动分层布局：BFS from trigger nodes ----
+function layout(f){
+  const nodes = f.nodes||[], edges = f.edges||[];
+  const ids = nodes.map(n=>n.id);
+  const outgoing = {}; edges.forEach(e=>(outgoing[e.from]=outgoing[e.from]||[]).push(e.to));
+  const indeg = {}; ids.forEach(i=>indeg[i]=0); edges.forEach(e=>indeg[e.to]=(indeg[e.to]||0)+1);
+  let layer = ids.filter(i=>!indeg[i]); const level = {}; let L = 0;
+  layer.forEach(i=>level[i]=L);
+  while (layer.length && L < 20) {
+    const next = [];
+    layer.forEach(i=>(outgoing[i]||[]).forEach(t=>{ if (level[t]===undefined){ level[t]=L+1; next.push(t);} }));
+    layer = next; L++;
+  }
+  ids.forEach(i=>{ if (level[i]===undefined) { level[i]=L; } });
+  const cols = {}; ids.forEach(i=>{ (cols[level[i]] = cols[level[i]]||[]).push(i); });
+  const X=90, YG=90, NW=150, NH=48;
+  const pos = {};
+  Object.entries(cols).forEach(([lv,arr])=>arr.forEach((id,k)=>{ pos[id]={x:X+lv*190, y:40+k*YG}; }));
+  return {nodes, edges, pos, NW, NH, cols};
+}
+
+function render(f){
+  const {nodes, edges, pos, NW, NH, cols} = layout(f);
+  const maxRows = Math.max(1, ...Object.values(cols).map(a=>a.length));
+  const W = 90 + Object.keys(cols).length*190 + 40, H = 60 + maxRows*90;
+  let svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/></marker></defs>`;
+  edges.forEach(e=>{
+    const a = pos[e.from], b = pos[e.to];
+    if (!a||!b) return;
+    const x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2;
+    const midx = (x1+x2)/2;
+    svg += `<path class="edge" d="M${x1},${y1} C${midx},${y1} ${midx},${y2} ${x2},${y2}"/>`;
+    if (e.label) svg += `<text class="edge-label" x="${midx}" y="${(y1+y2)/2-4}" text-anchor="middle">${e.label}</text>`;
+  });
+  nodes.forEach(n=>{
+    const p = pos[n.id]; if (!p) return;
+    const label = n.event ? n.event : (n.stage ? 'stage:'+n.stage : (n.action? n.action.type : n.type));
+    const sub = {trigger:'触发',condition:'条件',action:'动作',delay:'延迟',exit:'结束'}[n.type]||n.type;
+    svg += `<g class="node t-${n.type}" transform="translate(${p.x},${p.y})">
+      <rect width="${NW}" height="${NH}" fill="inherit"/>
+      <rect width="${NW}" height="${NH}" style="fill:none"/>
+      <text x="10" y="18">${label}</text>
+      <text class="ntype" x="10" y="34">${sub} · ${n.id}</text></g>`;
+  });
+  svg += '</svg>';
+  $('canvasWrap').innerHTML = svg;
+}
+
+async function loadRuns(id){
+  const r = await (await fetch(`api/v1/canvas/${id}`)).json();
+  const runs = r.runs || [];
+  $('runs').innerHTML = runs.slice(0,8).map(run=>{
+    const trace = (typeof run.trace==='string'? JSON.parse(run.trace||'[]') : run.trace||[]);
+    return `<div class="run"><b>${run.id}</b> <span class="st-${run.status}">${run.status}</span>
+      <div class="trace">${trace.map(t=>`${t.type}[${t.node}] ${t.note}`).join(' → ')}</div></div>`;
+  }).join('') || '<div style="color:var(--dim);font-size:12px">暂无执行记录（点"测试触发"试跑）</div>';
+}
+
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.style.display='block';
+  setTimeout(()=>t.style.display='none', 2200);
+}
+
+async function save(){
+  try {
+    const flow = JSON.parse($('flowJson').value);
+    const res = await (await fetch(`api/v1/canvas/${flow.id}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(flow)})).json();
+    if (res.ok){ toast('已保存'); loadFlowObj(flow); }
+  } catch(e){ toast('JSON 解析失败: '+e.message); }
+}
+
+async function runTest(){
+  const id = $('flowSel').value;
+  const res = await (await fetch(`api/v1/canvas/${id}/test`, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({distinct_id:'canvas_test_'+Date.now(), event:'signup', props:{}})})).json();
+  if (res.ok){ toast(`测试 Run ${res.run_id} 状态: ${res.status}`); loadFlow(); }
+  else toast('触发失败');
+}
+
+init();
+</script>
+</body>
+</html>
