@@ -112,6 +112,12 @@ async def execute_action(
         result = await ai.execute(ctx, action, loop, user)
         ctx.write_outbox({**record, **result})
         return result
+    if atype.startswith("ma."):
+        from userloop.integrations import ma
+
+        result = await ma.execute(ctx, action, loop, user)
+        ctx.write_outbox({**record, **result})
+        return result
 
     try:
         if atype == "webhook" or atype == "generic":

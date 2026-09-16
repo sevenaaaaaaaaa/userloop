@@ -34,7 +34,7 @@ def create_app(data_dir: str | None = None) -> Any:
     prefix = os.environ.get("USERLOOP_PREFIX", "").rstrip("/")
     # 免登录路径（埋点/接入/登录自身）
     public_api = {"/api/v1/ingest", "/api/v1/ingest/batch", "/api/v1/track",
-                  "/api/login", "/api/logout", "/api/auth/me"}
+                  "/api/v1/hub/ingest", "/api/login", "/api/logout", "/api/auth/me"}
 
     cfg = load_config(data_dir)
     store = Store(cfg["db_path"])
@@ -176,6 +176,48 @@ def create_app(data_dir: str | None = None) -> Any:
         base = f"{scheme}://{fwd_host}" if fwd_host else str(request.base_url).rstrip("/")
         return HTMLResponse(snippet(f"{base}{prefix}/api/v1/track"), media_type="application/javascript",
                             headers={"Cache-Control": "no-store"})
+
+    # ---- 全域数据中枢（Hub）：多源入站归一化 ----
+
+    @app.post(f"{prefix}/api/v1/hub/ingest")
+    async def hub_ingest(request: Request) -> JSONResponse:
+        """外部系统任意格式入站：?source=segment|ga4|shopify|hubspot|generic（缺省自动识别）。"""
+        import hashlib
+        import hmac as hmac_mod
+
+        from userloop.hub.normalize import detect_source, normalize
+
+        try:
+            payload = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
+
+        source = request.query_params.get("source") or detect_source(payload)
+        # 源级鉴权（可选）：hub.sources.<source>.secret + X-Hub-Signature=sha256(raw, secret)
+        hub_cfg = (cfg.get("hub") or {}).get("sources") or {}
+        secret = (hub_cfg.get(source) or {}).get("secret") if isinstance(hub_cfg, dict) else None
+        if secret:
+            raw = await request.body()
+            sig = request.headers.get("X-Hub-Signature", "").removeprefix("sha256=")
+            if hmac_mod.new(secret.encode(), raw, hashlib.sha256).hexdigest() != sig:
+                raise HTTPException(status_code=401, detail="invalid hub signature")
+
+        events = normalize(source, payload)
+        results = []
+        for item in events:
+            try:
+                results.append(await handle(store, ctx, item))
+            except ValueError:
+                continue  # 无身份的指标行跳过
+        # 原始档案留存（file-first，供对账/回放）
+        import os
+
+        raw_dir = os.path.join(cfg["data_dir"], "hub")
+        os.makedirs(raw_dir, exist_ok=True)
+        src_name = source or "generic"
+        with open(os.path.join(raw_dir, f"{src_name}.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": iso_now(), "payload": payload}, ensure_ascii=False, default=str) + "\n")
+        return JSONResponse({"source": src_name, "accepted": len(results)})
 
     # ---- 查询 API ----
 

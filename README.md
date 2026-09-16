@@ -2,7 +2,7 @@
 
 **全域自动化用户运营工具 —— 让全用户旅程自动形成 Loop。**
 
-UserLoop 监听全域用户行为事件，自动为每个用户重建生命周期旅程（Visitor → Signup → Activated → Paying → Retained → Advocate），在旅程断点（卡点、流失、机会）处**自动生成运营 Loop**：触发 → 动作（邮件/Webhook/飞书/连接器）→ 目标验证 → 效果回流，无需人工逐条搭建自动化。
+UserLoop 是**独立的全域营销数据中枢 + 用户旅程 Loop 引擎**：自己收数（多源归一化，不只自家埋点）、自己建档（自有 CDP，不依赖外部 CDP）、自己出触达（邮件/飞书/HubSpot/任意 MA）、自己验效果（目标验证 → 回流）。OpenFlow/MFlow/Shopify/HubSpot 都是可选的数据源或输出目标，拔掉任何一个闭环不中断。差异化定位详见 `docs/POSITIONING.md`。
 
 > 借鉴家族项目：OpenFlow（事件总线 + CDP + 流程执行三件套）、MFlow（状态机 SSOT + 质量钩子 + 调度）、inFlow（动作派发 → 验证窗口 → 回流闭环范式）。
 
