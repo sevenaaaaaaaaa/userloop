@@ -79,6 +79,21 @@ def serve(data_dir: str | None, host: str | None, port: int | None) -> None:
 
 @main.command()
 @click.option("--data-dir", default=None)
+def mcp(data_dir: str | None) -> None:
+    """启动 MCP Server（stdio，只读）：供 OpenFlow AgentRuntime / Claude 等消费旅程数据."""
+    import os
+
+    from userloop.config import load_config
+
+    cfg = load_config(data_dir)
+    os.environ["USERLOOP_DATA"] = cfg["data_dir"]
+    from userloop.mcp_server import main as mcp_main
+
+    mcp_main()
+
+
+@main.command()
+@click.option("--data-dir", default=None)
 def stats(data_dir: str | None) -> None:
     """查看运营看板摘要。"""
 

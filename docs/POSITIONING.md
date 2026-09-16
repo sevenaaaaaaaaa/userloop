@@ -1,51 +1,67 @@
-# UserLoop 定位：独立全域营销数据中枢
+# UserLoop 定位：独立内核 × 家族深度联动
 
-> vs MFlow（内容营销流水线）、vs OpenFlow（增长执行 OS）—— UserLoop 的差异化与独立性
+> vs MFlow（内容营销流水线）、vs OpenFlow（增长执行 OS）—— 本文按**已实现功能**自评，随功能演进修订。
 
 ## 一句话
 
-**UserLoop 是独立的用户旅程 Loop 引擎与全域营销数据中枢**：自己收数（不依赖任何一家 CDP）、自己算旅程（自有 CDP-lite）、自己出触达（邮件/飞书/HubSpot/任意 MA）、自己验效果（目标验证 → 回流）。与家族系统是**可插拔关系，不是依赖关系**。
+**UserLoop 是独立的用户旅程 Loop 引擎与全域营销数据中枢，同时与家族系统（OpenFlow/MFlow）保持一等的 API 联动**：能独立运转，联动时 1+1>2，联动失败自动降级、闭环不断。
 
-## 与 OpenFlow / MFlow 的边界
+## 自评：定位 × 实际功能（2026-09-16）
+
+| 主张 | 实现状态 | 备注 |
+|---|---|---|
+| 独立全域数据中枢（多源入站） | ✅ 已实现 | `/api/v1/hub/ingest` 自动识别 segment/ga4/shopify/hubspot/generic + HMAC；原始报文落盘可回放 |
+| 广告/社媒直连适配器 | ⚠️ 部分 | 格式层已收（GA4 MP/Segment/webhook），平台级拉取适配器（Meta/Google Ads API）未做，属路线图 |
+| 对接更多 MA | ✅ 已实现 | `ma.hubspot.*`（lifecycle 同步）、`ma.webhook`（任意 MA + HMAC）；n8n/Zapier 走通用 webhook |
+| 不依赖原 CDP | ✅ 已实现 | 自有 CDP-lite 全链路自洽；**但联动 OpenFlow 是增值不是障碍**（见下） |
+| 旅程自动成 Loop | ✅ 已实现 | 8 阶段旅程 + 断点 → 模板/Canvas Loop → 验证回流 |
+| AI 个性化触达 | ✅ 已实现 | `ai.email/compose`（DeepSeek 生成 → SMTP 真发），失败降级模板 |
+
+修正记录：初版定位写过"不依赖原 CDP 赋能"，容易读成"与 OpenFlow 切割"。**修正为：独立是内核属性，联动是可选增益** —— 两者的关系是插件式组合，不是替代。
+
+## 与 OpenFlow / MFlow 的边界与联动
 
 | | OpenFlow | MFlow | UserLoop |
 |---|---|---|---|
-| 本质 | 单站增长执行 OS（TIPS） | 内容营销流水线 | 用户旅程 × 运营 Loop |
-| 数据 | 自有 CDP（站内埋点） | 文件+状态机（SEO/GSC 数据） | **全域数据中枢**：多源归一化 + 自有 CDP-lite |
-| 触达 | 站内自动化（画布/模板） | 内容发布（需人工授权） | 全渠道触达：邮件/飞书/webhook/HubSpot/任意 MA |
-| 独立性 | 独立产品 | 独立产品 | **不依赖 OpenFlow CDP** —— OpenFlow 只是众多数据源之一 |
+| 本质 | 单站增长执行 OS（TIPS） | 内容营销流水线 | 用户旅程 × 运营 Loop × 全域数据 |
+| 数据 | 站内 CDP | SEO/内容数据 | **全域多源** + 自有 CDP-lite |
+| 角色 | 站点执行与转化 | 内容生产与 GEO | 跨系统的旅程编排与触达 |
 
-## 差异化支柱
+### 联动协议（四通道，均为一等公民）
 
-### 1. 独立全域营销数据中枢
-多源入站归一化（`POST /api/v1/hub/ingest?source=` 或自动识别）：
-- **电商**：Shopify 订单 webhook（paid/refund → purchase/refund 旅程事件）
-- **广告平台**：GA4 MP 风格、Segment 风格、自定义 webhooks
-- **社媒/内容**：表单提交、关注/互动事件（webhook 转发）
-- **外部 MA**：HubSpot webhook（contact 生命周期变更）
-- **国内分析**：神策/GrowingIO 风格 `{distinct_id, event, properties}`
+| 通道 | 方向 | 实现 | 状态 |
+|---|---|---|---|
+| ① 事件流入 | OpenFlow → UserLoop | OpenFlow 插件 `userloop-tracker` 钩子 `cdp_event_received` 旁路转发 → `/api/v1/ingest`（HMAC token） | ✅ |
+| ② 触达/动作派发 | UserLoop → 外部 | `email`/`feishu`/`webhook`（直发）、`ma.hubspot.*`、`mflow.create_content`、`openflow.automation` | ✅ |
+| ③ 洞察回读 | OpenFlow/Agent → UserLoop | REST API（登录门禁）+ **MCP Server**（`userloop mcp`：dashboard/journey/loops/feedback 四工具，只读） | ✅ |
+| ④ 信号回推 | UserLoop → OpenFlow | `openflow.webhook_insight` → InboundReceiver HMAC → OpenFlow CDP（`userloop_signal` 事件，GrowthBrain 可消费） | ✅ 已实测 |
 
-每源可选 HMAC 鉴权（`config.hub.sources.<source>.secret` + `X-Hub-Signature`），原始报文落 `data/hub/<source>.jsonl` 可对账回放。
+MFlow 联动纪律沿袭 inFlow docs/04：对 MFlow 走插件 + HTTP，不附加 MCP；发布永远停在人工授权后。
 
-### 2. 对接更多 MA（不止自家触达）
-- `ma.hubspot.contact_upsert`：旅程阶段 → HubSpot lifecycle_stage 同步（email 幂等 upsert）
-- `ma.hubspot.note`：触达摘要写入联系人（自定义属性）
-- `ma.webhook`：任意客户现有 MA（n8n/Zapier/自研）webhook + HMAC 签名
-- 兼容数据入站：客户 MA 的 webhook 直接喂 `/api/v1/hub/ingest`
-
-### 3. 不依赖原 CDP 赋能
-UserLoop 自有 CDP-lite（users/events/stage_transitions + stats），无外部依赖即可全链路运转：
-建档 → 旅程 → 断点 → Loop → 触达 → 验证回流。OpenFlow/MFlow/HubSpot/电商都是**可选的输入源或输出目标**，
-拔掉任何一个，闭环不中断（所有外部通道失败自动降级 dry-run 落 outbox）。
-
-## 与家族系统的协同（可选增强，非依赖）
+### ①+② 组合效果（已上线实测）
 
 ```
-真实站点(OpenFlow/任意) ──track.js──▶ ┌──────────┐ ──mail(DeepSeek 文案)──→ 用户
-Shopify/广告/HubSpot ──hub/ingest──▶ │ UserLoop │ ──ma.hubspot──────→ 客户现有 MA
-外部 MA webhook ─────────────────▶   └────┬─────┘ ──openflow.*──────→ OpenFlow CDP(可选)
-                                          └──验证回流→ feedback → 模板效果
+OpenFlow 站内行为(cdp_event_received) ─┐
+OpenFlow 页面行为(track.js) ───────────┤
+Shopify/广告/HubSpot(hub/ingest) ──────┤
+外部 MA webhook ──────────────────────┘
+              ▼
+        UserLoop 旅程引擎（自有 CDP）
+              ▼
+   断点 → Loop → AI 邮件/飞书/HubSpot 同步
+              ▼
+   高价值信号回推 OpenFlow CDP（GrowthBrain 消费）
+   旅程断点推送 MFlow 产稿（内容运营闭环）
 ```
 
-- OpenFlow：`openflow.webhook_insight` 把高价值旅程信号回推其 CDP，供 GrowthBrain 消费（可选）
-- MFlow：`mflow.create_content` 把旅程断点变成内容选题（可选）
+## 不做什么
+
+- 不做站内 CMS/课程/商店（OpenFlow 已有）——UserLoop 不吞并，只联动
+- 不替任何系统发布（MFlow 铁律）/不写外部 MA 的敏感操作
+- MCP Server 只读 —— 写操作一律回到 UserLoop 自己的 Loop 状态机 + 审计
+
+## 下一步（按价值排序）
+
+1. 广告平台拉取型 source 插件（GA4/Google Ads OAuth 拉取）→ `hub/ingest` 定时喂数
+2. Canvas/模板效果数据反哺 OpenFlow 后台卡片（经其插件 API）
+3. 多租户 workspace（服务多个站点/客户）
