@@ -237,16 +237,19 @@ async function load(){
   setTimeout(load, 30000);
 }
 
-// 侧栏高亮
+// 侧栏高亮：跟随滚动，取最后一个越过顶部的分区
 const secs=[...document.querySelectorAll('main section[id]')];
-const obs=new IntersectionObserver(es=>{
-  es.forEach(e=>{ if(e.isIntersecting){ document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.classList.toggle('on', a.dataset.sec===e.target.id)); }});
-},{rootMargin:'-20% 0px -70% 0px'});
-secs.forEach(s=>obs.observe(s));
+function syncNav(){
+  let cur = secs[0] ? secs[0].id : '';
+  secs.forEach(s=>{ if(s.getBoundingClientRect().top <= 140) cur = s.id; });
+  document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.classList.toggle('on', a.dataset.sec===cur));
+}
+window.addEventListener('scroll', syncNav, {passive:true});
 document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.addEventListener('click',()=>{
   document.getElementById('sidebar').classList.remove('open');
 }));
 
+syncNav();
 load();
 </script>
 </body>
