@@ -16,8 +16,8 @@
     <div class="err" id="err"></div>
     <form onsubmit="return doLogin(event)">
       <div class="fld">
-        <label>用户名</label>
-        <input class="inp" id="u" autocomplete="username" autofocus placeholder="例如：Seven">
+        <label>用户名 <span class="hint">建议带后缀，密码管理器可独立保存</span></label>
+        <input class="inp" id="u" autocomplete="username" autofocus placeholder="例如：Seven@userloop">
       </div>
       <div class="fld">
         <label>密码</label>
@@ -25,17 +25,21 @@
       </div>
       <button class="btn primary block" type="submit">登 录</button>
     </form>
-    <div class="sub" style="margin:18px 0 0;font-size:var(--fs-sm)">账号与 MFlow 工作台同名同密码</div>
+    <div class="sub" style="margin:18px 0 0;font-size:var(--fs-sm)">
+      Seven 与 Seven@userloop 均可登录；账号与 MFlow 工作台同名同密码
+    </div>
   </div>
 </div>
 <script>
+// 记住上次登录名（便于密码管理器独立保存 UserLoop 专用条目）
+try{ var last=localStorage.getItem('ul_user'); if(last) document.getElementById('u').value=last; }catch(e){}
 async function doLogin(e){
   e.preventDefault();
   const u=document.getElementById('u').value.trim(), p=document.getElementById('p').value;
   const err=document.getElementById('err'); err.textContent='';
   try{
     const r=await fetch('api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-    if(r.ok){ location.reload(); return false; }
+    if(r.ok){ try{ localStorage.setItem('ul_user', u); }catch(e){} location.reload(); return false; }
     const d=await r.json().catch(()=>({}));
     err.textContent=d.error||'登录失败';
   }catch(x){ err.textContent='网络错误，请重试'; }

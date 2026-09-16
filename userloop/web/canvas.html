@@ -144,7 +144,7 @@ function loadFlowObj(f){
 }
 
 async function init(){
-  const me=await j('api/auth/me'); $('me-name').textContent=me.name||me.username||'—';
+  const me=await j('api/auth/me'); $('me-name').textContent=me.login||me.name||me.username||'—';
   const r=await j(FLOW); const flows=r.flows||[];
   $('flowSel').innerHTML=flows.map(f=>`<option value="${f.id}">${f.name||f.id}${f.enabled===false?'（停用）':''}</option>`).join('');
   if(flows.length) loadFlow();

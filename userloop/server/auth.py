@@ -16,6 +16,25 @@ from typing import Any
 
 COOKIE_NAME = "userloop_session"
 
+# 登录名专属后缀：Seven@userloop / Seven@ul 均可，便于密码管理器独立保存、不与主站混淆
+SUFFIXES = ("@userloop", "@ul")
+
+
+def normalize_username(username: str) -> str:
+    """剥离 UserLoop 专属后缀，得到账号库中的规范用户名。"""
+    name = (username or "").strip()
+    low = name.lower()
+    for suf in SUFFIXES:
+        if low.endswith(suf):
+            return name[: -len(suf)].strip()
+    return name
+
+
+def display_username(username: str, suffix: str = "@userloop") -> str:
+    """展示/预填用：规范用户名 → 带后缀形式。"""
+    base = normalize_username(username)
+    return f"{base}{suffix}" if base else ""
+
 
 def load_users(data_dir: str) -> list[dict]:
     path = os.path.join(data_dir, "auth.json")
@@ -34,8 +53,9 @@ def auth_enabled(data_dir: str) -> bool:
 
 
 def verify_user(data_dir: str, username: str, password: str) -> dict | None:
+    wanted = normalize_username(username)
     for rec in load_users(data_dir):
-        if rec.get("username") != username:
+        if str(rec.get("username", "")).lower() != wanted.lower():
             continue
         h = rec.get("hash", "")
         if not h:
@@ -44,8 +64,8 @@ def verify_user(data_dir: str, username: str, password: str) -> dict | None:
             import bcrypt
 
             if bcrypt.checkpw(password.encode(), h.encode()):
-                return {"username": username, "name": rec.get("name", username),
-                        "role": rec.get("role", "member")}
+                return {"username": rec["username"], "name": rec.get("name", rec["username"]),
+                        "role": rec.get("role", "member"), "login": display_username(rec["username"])}
         except Exception:  # noqa: BLE001 —— bcrypt 环境异常按失败处理
             return None
     return None

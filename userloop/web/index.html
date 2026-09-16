@@ -163,8 +163,8 @@ async function load(){
   const [d, loops, events, users, me] = await Promise.all([
     j('api/v1/dashboard'), j('api/v1/loops?limit=12'), j('api/v1/events?limit=14'), j('api/v1/users?limit=12'), j('api/auth/me')
   ]);
-  $('me-name').textContent = me.name || me.username || '—';
-  $('me-chip').title = (me.name||'') + ' · ' + (me.role||'');
+  $('me-name').textContent = me.login || me.username || '—';
+  $('me-chip').title = (me.name||'') + ' · ' + (me.role||'') + '（' + (me.login||'') + '）';
   $('ts').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false});
 
   const c = d.counts || {};

@@ -58,6 +58,33 @@ def test_sid_from_cookie() -> None:
     assert auth_mod.sid_from_cookie("a=1") is None
 
 
+def test_suffix_login_forms(tmp_path) -> None:
+    """Seven / Seven@userloop / Seven@ul 均可登录；错误后缀拒绝；/me 返回带后缀的登录名."""
+    import json as _json
+
+    from fastapi.testclient import TestClient
+
+    from userloop.server import auth as a
+    from userloop.server.app import create_app
+
+    with open(tmp_path / "auth.json", "w", encoding="utf-8") as f:
+        _json.dump(AUTH, f, ensure_ascii=False)
+    assert a.normalize_username("Seven@userloop") == "Seven"
+    assert a.normalize_username(" Seven@UL ") == "Seven"
+    assert a.normalize_username("Seven") == "Seven"
+    assert a.display_username("Seven") == "Seven@userloop"
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        for name in ("Seven", "seven@userloop", "Seven@ul"):
+            client.post("/api/logout")
+            r = client.post("/api/login", json={"username": name, "password": "pw123"})
+            assert r.status_code == 200, name
+            assert client.get("/api/auth/me").json()["login"].lower() == "seven@userloop"
+        client.post("/api/logout")
+        assert client.post("/api/login", json={"username": "Seven@other", "password": "pw123"}).status_code == 403
+
+
 def test_prefix_routes(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("USERLOOP_PREFIX", "/userloop")
     from userloop.server import app as app_mod
