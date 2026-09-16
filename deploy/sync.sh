@@ -73,7 +73,7 @@ fi
 # ─── 6. 刷新 Cloudflare（/userloop/* 相关 URL）───
 step "6/6 刷新 Cloudflare 缓存"
 PURGE_URLS=$(cat <<EOF
-{"files":["$SITE/userloop/track.js","$SITE/userloop/","$SITE/userloop/static/index.html","$SITE/userloop/static/canvas.html","$SITE/userloop/static/login.html"]}
+{"files":["$SITE/userloop/track.js","$SITE/userloop/","$SITE/userloop","$SITE/userflow","$SITE/userflow/","$SITE/userloop/static/index.html","$SITE/userloop/static/canvas.html","$SITE/userloop/static/login.html"]}
 EOF
 )
 if [ -f "$CF_CREDS" ]; then

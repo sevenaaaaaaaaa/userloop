@@ -42,11 +42,12 @@ def create_app(data_dir: str | None = None) -> Any:
     sessions = Sessions()
     authed_mode = auth_enabled(cfg["data_dir"])
     web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
-    app = FastAPI(title="UserLoop", version="0.1.0", description="全域自动化用户运营工具", docs_url=None, redoc_url=None)
+    app = FastAPI(title="UserLoop", version="0.1.0", description="全域自动化用户运营工具",
+                  docs_url=None, redoc_url=None, redirect_slashes=False)
 
     def _page(name: str) -> HTMLResponse:
         with open(os.path.join(web_dir, name), encoding="utf-8") as f:
-            return HTMLResponse(f.read())
+            return HTMLResponse(f.read(), headers={"Cache-Control": "no-store"})
 
     def _sid(request: Request) -> str | None:
         return sid_from_cookie(request.headers.get("Cookie", ""))
@@ -64,9 +65,15 @@ def create_app(data_dir: str | None = None) -> Any:
                 # 页面门禁：未登录返回登录页（对齐 MFlow）
                 if authed_mode and rel in pages and not sessions.get(_sid(request)):
                     return _page("login.html")
-                return await call_next(request)
+                response = await call_next(request)
+                if rel in pages or rel.startswith("/api/"):
+                    # 动态内容禁缓存：页面按登录态变化，API 按会话/实时数据
+                    response.headers.setdefault("Cache-Control", "no-store")
+                return response
             if (not authed_mode) or sessions.get(_sid(request)) or _token_ok(request, cfg):
-                return await call_next(request)
+                response = await call_next(request)
+                response.headers.setdefault("Cache-Control", "no-store")
+                return response
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
 
@@ -354,13 +361,18 @@ def create_app(data_dir: str | None = None) -> Any:
 
     app.mount(f"{prefix}/static", StaticFiles(directory=web_dir), name="static")
 
-    @app.get(prefix or "/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
-        return _page("index.html")
+    if prefix:
+        # redirect_slashes=False：无斜杠/斜杠两种形态都要显式注册
+        app.get(f"{prefix}/", response_class=HTMLResponse)(lambda: _page("index.html"))
+        app.get(f"{prefix}/canvas", response_class=HTMLResponse)(lambda: _page("canvas.html"))
+    else:
+        @app.get("/", response_class=HTMLResponse)
+        async def index() -> HTMLResponse:
+            return _page("index.html")
 
-    @app.get(f"{prefix}/canvas", response_class=HTMLResponse)
-    async def canvas_page() -> HTMLResponse:
-        return _page("canvas.html")
+        @app.get("/canvas", response_class=HTMLResponse)
+        async def canvas_page() -> HTMLResponse:
+            return _page("canvas.html")
 
     return app
 
