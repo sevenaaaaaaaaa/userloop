@@ -18,7 +18,8 @@ dependencies = [
     "click>=8.1",
     "rich>=13.8",
     "bcrypt>=4.1",
-    "mcp>=1.2",
+    "mcp>=1.2,<2",
+    "aiomysql>=0.2",
 ]
 
 [project.optional-dependencies]

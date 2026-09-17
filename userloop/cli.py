@@ -148,6 +148,68 @@ def _print_decisions(recs: list[dict]) -> None:
     console.print(table)
 
 
+@main.group()
+def db() -> None:
+    """存储运维（分层存储：events 主用 MySQL / 兜底 SQLite）。"""
+
+
+@db.command("status")
+@click.option("--data-dir", default=None)
+def db_status(data_dir: str | None) -> None:
+    """查看当前 events 后端与规模。"""
+
+    async def _run() -> None:
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        try:
+            backend = getattr(store.events, "backend", "?")
+            reason = getattr(store.events, "reason", "")
+            counts = await store.counts()
+            storage = ((cfg.get("storage") or {}).get("events") or {})
+            console.print(f"events 后端: [bold]{backend}[/]  配置: {storage.get('backend', 'auto')}"
+                          + (f"  降级原因: {reason}" if reason else ""))
+            console.print(f"SQLite: {cfg['db_path']}  |  "
+                          + "  ".join(f"{k}={v}" for k, v in counts.items()))
+            if backend.startswith("mysql"):
+                console.print(f"MySQL events 行数: {await store.events.total()}")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@db.command("migrate-events")
+@click.option("--data-dir", default=None)
+@click.option("--keep-sqlite/--no-keep-sqlite", default=True, help="保留 SQLite 存量（默认保留，作备份）")
+def db_migrate_events(data_dir: str | None, keep_sqlite: bool) -> None:
+    """把 SQLite events 全量回填到 MySQL（幂等，可重复执行）。"""
+
+    async def _run() -> None:
+        from userloop.core.eventstore import MySqlEventStore, migrate_events_sqlite_to_mysql
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        storage = ((cfg.get("storage") or {}).get("events") or {})
+        mysql_cfg = storage.get("mysql") or {}
+        if not mysql_cfg.get("host"):
+            console.print("[red]未配置 storage.events.mysql，无法迁移[/]")
+            return
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        try:
+            result = await migrate_events_sqlite_to_mysql(store.db, MySqlEventStore(mysql_cfg))
+            console.print(f"迁移完成: {result}")
+            if not keep_sqlite:
+                console.print("（已选择不保留 SQLite 存量；如需清理请手动归档 data/*.db）")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.option("--data-dir", default=None)
 def stats(data_dir: str | None) -> None:

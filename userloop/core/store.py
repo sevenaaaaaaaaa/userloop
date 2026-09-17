@@ -166,9 +166,11 @@ def new_id(prefix: str) -> str:
 
 
 class Store:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, cfg: dict | None = None) -> None:
         self.path = path
+        self.cfg = cfg or {}
         self.db: aiosqlite.Connection | None = None
+        self.events: Any = None  # EventStore（SQLite 或 MySQL，分层存储）
 
     async def connect(self) -> None:
         self.db = await aiosqlite.connect(self.path, isolation_level=None)
@@ -182,12 +184,21 @@ class Store:
         await self.db.execute("PRAGMA wal_autocheckpoint=512")
         await self.db.executescript(SCHEMA)
         await self.db.commit()
+        # events 分层存储（Tier1 SQLite / Tier2 MySQL），失败自动降级
+        from userloop.core.eventstore import build_event_store
+
+        self.events = await build_event_store(self.cfg, self.db)
         try:
             await self.db.execute("PRAGMA optimize")
         except aiosqlite.Error:
             pass
 
     async def close(self) -> None:
+        if self.events is not None and getattr(self.events, "backend", "").startswith("mysql"):
+            try:
+                await self.events.close()
+            except Exception:  # noqa: BLE001
+                pass
         if self.db:
             try:
                 await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # 收尾压缩 WAL，防文件膨胀
@@ -257,86 +268,37 @@ class Store:
     # ---- events ----
 
     async def insert_event(self, e: dict) -> int | None:
-        assert self.db
-        try:
-            cur = await self.db.execute(
-                "INSERT INTO events (user_id, distinct_id, event, props, source, event_id, created_at) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (e["user_id"], e["distinct_id"], e["event"], j(e.get("props", {})),
-                 e.get("source", "api"), e.get("event_id"), e["created_at"]),
-            )
-            return cur.lastrowid
-        except aiosqlite.IntegrityError:
-            return None  # 幂等去重
+        """写事件（分层存储：MySQL 主用 / SQLite 兜底）"""
+        return await self.events.insert(e)
 
     async def has_event_since(self, user_id: str, event: str | None, since: str, before: str | None = None) -> dict | None:
         """查询窗口 [since, before) 内是否出现过目标事件（before=None 表示至今）。"""
-        assert self.db
-        if event:
-            sql = "SELECT * FROM events WHERE user_id=? AND event=? AND created_at>=?"
-            args: list[Any] = [user_id, event, since]
-        else:
-            sql = "SELECT * FROM events WHERE user_id=? AND created_at>=?"
-            args = [user_id, since]
-        if before:
-            sql += " AND created_at<?"
-            args.append(before)
-        sql += " LIMIT 1"
-        cur = await self.db.execute(sql, args)
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        return await self.events.has_since(user_id, event, since, before)
 
     async def count_events(self, user_id: str, event: str) -> int:
-        assert self.db
-        cur = await self.db.execute("SELECT COUNT(*) c FROM events WHERE user_id=? AND event=?", (user_id, event))
-        row = await cur.fetchone()
-        return int(row["c"]) if row else 0
+        return await self.events.count(user_id, event)
 
     async def list_events(self, limit: int = 100) -> list[dict]:
-        assert self.db
-        cur = await self.db.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
-        return [dict(r) for r in await cur.fetchall()]
+        return await self.events.recent(limit)
 
     async def recent_events_for_user(self, user_id: str, limit: int = 10) -> list[dict]:
-        """单用户最近事件（走 idx_events_user，不在内存里全表过滤）。"""
-        assert self.db
-        cur = await self.db.execute(
-            "SELECT * FROM events WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit))
-        return [dict(r) for r in await cur.fetchall()]
+        """单用户最近事件（走索引，不在内存里全表过滤）。"""
+        return await self.events.recent_for_user(user_id, limit)
 
     async def newest_event_at(self) -> str | None:
         """最新事件时间（极轻量，用于查询条件缓存/心跳判断）。"""
-        assert self.db
-        cur = await self.db.execute("SELECT created_at FROM events ORDER BY id DESC LIMIT 1")
-        row = await cur.fetchone()
-        return row["created_at"] if row else None
+        return await self.events.newest_at()
 
     async def prune_events(self, retention_days: int = 180, noise_days: int = 7,
                            noise_events: tuple[str, ...] = ("heartbeat",)) -> dict:
-        """保留策略（对齐 OpenFlow 教训：事件表不得无限增长）。
-
-        普通事件保留 retention_days 天；噪音类事件（心跳等）只留 noise_days 天。
-        """
-        from datetime import datetime, timedelta
-
-        assert self.db
-        cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"
-        noise_cut = (datetime.utcnow() - timedelta(days=noise_days)).isoformat(timespec="seconds") + "Z"
-        cur = await self.db.execute("DELETE FROM events WHERE created_at < ?", (cutoff,))
-        removed = cur.rowcount or 0
-        noise_removed = 0
-        if noise_events:
-            marks = ",".join("?" * len(noise_events))
-            cur = await self.db.execute(
-                f"DELETE FROM events WHERE event IN ({marks}) AND created_at < ?",
-                (*noise_events, noise_cut))
-            noise_removed = cur.rowcount or 0
+        """保留策略（对齐 OpenFlow 教训：事件表不得无限增长）。委托 events 后端执行。"""
+        result = await self.events.prune(retention_days, noise_days, noise_events)
         try:
             await self.db.execute("PRAGMA optimize")
             await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # 清理后压缩 WAL（DB 使用教训）
         except aiosqlite.Error:
             pass
-        return {"removed": removed, "noise_removed": noise_removed, "cutoff": cutoff}
+        return result
 
     # ---- stage transitions ----
 
@@ -629,8 +591,8 @@ class Store:
 
     async def counts(self) -> dict:
         assert self.db
-        out = {}
-        for table in ("users", "events", "loops", "actions", "feedback"):
+        out = {"events": await self.events.total()}
+        for table in ("users", "loops", "actions", "feedback"):
             cur = await self.db.execute(f"SELECT COUNT(*) c FROM {table}")
             row = await cur.fetchone()
             out[table] = row["c"] if row else 0
