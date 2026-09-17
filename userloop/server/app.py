@@ -90,9 +90,11 @@ def create_app(data_dir: str | None = None) -> Any:
     async def _startup() -> None:
         await store.connect()
         from userloop.core.templates import seed_canvas, seed_templates
+        from userloop.experiments.engine import seed_experiments
 
         await seed_templates(store, cfg["data_dir"])
         await seed_canvas(store, cfg["data_dir"])
+        await seed_experiments(store, cfg["data_dir"])
         sched = build_scheduler(store, ctx)
         sched.start()
         state["sched"] = sched
@@ -263,11 +265,22 @@ def create_app(data_dir: str | None = None) -> Any:
         newest = await store.newest_event_at()
         version = (f"{counts.get('users')}-{counts.get('events')}-{counts.get('loops')}-"
                    f"{counts.get('feedback')}-{len(ai_out)}-{newest or ''}")
+        from userloop.experiments import engine as _ab
+
+        ab_out = []
+        for exp in await store.list_experiments(enabled_only=False):
+            verdict = {k: v for k, v in (await _ab.evaluate(store, exp["id"])).items()
+                       if k in ("verdict", "metric", "leader", "confidence", "reason")}
+            ab_out.append({"id": exp["id"], "name": exp.get("name"), "channel": exp.get("channel"),
+                           "metric": _ab.cfg_of(exp)["metric"], "promoted_variant": exp.get("promoted_variant"),
+                           "variants": [{"id": v["id"], "name": v.get("name")} for v in (exp.get("variants") or [])],
+                           "metrics": await _ab.metrics(store, exp), "verdict": verdict})
         data = {"counts": counts, "stages": stages, "funnel": _funnel(stages),
                 "loop_status": loop_status, "template_stats": template_stats,
                 "recent_transitions": transitions, "loops": loops_out,
                 "events": events, "users": users,
-                "ai_decisions": ai_out, "ai_counts": await store.ai_decision_counts()}
+                "ai_decisions": ai_out, "ai_counts": await store.ai_decision_counts(),
+                "experiments": ab_out}
         return data, version
 
     @app.get(f"{prefix}/api/v1/overview")
@@ -598,6 +611,43 @@ def create_app(data_dir: str | None = None) -> Any:
             raise HTTPException(status_code=404, detail="decision not found")
         await store.update_ai_decision(decision_id, status="rejected")
         return JSONResponse({"ok": True})
+
+    # ---- A/B 实验 API ----
+
+    @app.get(f"{prefix}/api/v1/experiments")
+    async def experiments_list(evaluate: int = 1) -> JSONResponse:
+        from userloop.experiments import engine as ab
+
+        exps = await store.list_experiments(enabled_only=False)
+        out = []
+        for exp in exps:
+            item = {"id": exp["id"], "name": exp.get("name"), "channel": exp.get("channel"),
+                    "enabled": exp.get("enabled", True), "metric": ab.cfg_of(exp)["metric"],
+                    "promoted_variant": exp.get("promoted_variant"),
+                    "variants": [{"id": v["id"], "name": v.get("name"), "weight": v.get("weight")}
+                                 for v in (exp.get("variants") or [])]}
+            item["metrics"] = await ab.metrics(store, exp)
+            if evaluate:
+                item["verdict"] = {k: v for k, v in (await ab.evaluate(store, exp["id"])).items()
+                                   if k in ("verdict", "metric", "leader", "confidence", "reason")}
+            out.append(item)
+        return JSONResponse({"count": len(out), "experiments": out})
+
+    @app.post(f"{prefix}/api/v1/experiments/{{exp_id}}/evaluate")
+    async def experiments_evaluate(exp_id: str) -> JSONResponse:
+        from userloop.experiments import engine as ab
+
+        return JSONResponse(await ab.evaluate(store, exp_id))
+
+    @app.post(f"{prefix}/api/v1/experiments/{{exp_id}}/promote")
+    async def experiments_promote(exp_id: str, request: Request) -> JSONResponse:
+        from userloop.experiments import engine as ab
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        return JSONResponse(await ab.promote(store, exp_id, body.get("variant")))
 
     # ---- 运维 API ----
 

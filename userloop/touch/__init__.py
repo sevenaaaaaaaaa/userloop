@@ -30,7 +30,26 @@ async def dispatch(ctx: Any, action: dict, loop: dict, user: dict, store: Any = 
                                   template_id=str(payload.get("template_id") or loop.get("template_id") or ""))
     if store is not None and not hasattr(ctx, "store"):
         ctx.store = store  # 驱动里按身份挑渠道标识
+
+    # A/B 版式实验：稳定分桶 → 覆盖内容槽位（闭环：已 promote 则只发 winner）
+    ab: dict[str, Any] | None = None
+    if store is not None:
+        try:
+            from userloop.experiments import engine as ab_engine
+
+            picked = await ab_engine.pick(store, channel, spec.template_id, user["id"], spec.loop_id)
+            if picked:
+                exp, variant = picked
+                variant = {**variant, "_experiment": exp["id"]}
+                spec = ab_engine.apply_variant(spec, variant)
+                spec.loop_id = spec.loop_id or loop.get("id")
+                ab = {"experiment": exp["id"], "variant": variant["id"], "variant_name": variant.get("name", "")}
+        except Exception:  # noqa: BLE001 —— 实验异常不得影响正常交付
+            ab = None
+
     result = await driver.deliver(spec, user, ctx)
     out = {"type": atype, "channel": channel, "spec": {"title": spec.title, "cta": spec.cta_text}}
+    if ab:
+        out["ab"] = ab
     out.update(result.as_dict())
     return out

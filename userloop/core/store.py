@@ -124,6 +124,23 @@ CREATE TABLE IF NOT EXISTS canvas_waits (
 );
 CREATE INDEX IF NOT EXISTS idx_waits_due ON canvas_waits(status, resume_at);
 
+CREATE TABLE IF NOT EXISTS ab_experiments (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ab_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    variant TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    loop_id TEXT,
+    channel TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ab_exp ON ab_assignments(experiment_id, variant, created_at);
+CREATE INDEX IF NOT EXISTS idx_ab_user ON ab_assignments(user_id, experiment_id);
+
 CREATE TABLE IF NOT EXISTS touch_pages (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -620,6 +637,55 @@ class Store:
             scored.append((touched, u.get("last_seen") or "", u))
         scored.sort(key=lambda x: (x[0], x[1]), reverse=False)
         return [u for _, _, u in scored[:limit]]
+
+    # ---- A/B 实验 ----
+
+    async def put_experiment(self, exp: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO ab_experiments (id, data) VALUES (?,?) "
+            "ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+            (exp["id"], j(exp)),
+        )
+
+    async def list_experiments(self, enabled_only: bool = False) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute("SELECT data FROM ab_experiments")
+        rows = [pj(r["data"], {}) for r in await cur.fetchall()]
+        return [r for r in rows if r and (not enabled_only or r.get("enabled", True))]
+
+    async def get_experiment(self, exp_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT data FROM ab_experiments WHERE id=?", (exp_id,))
+        row = await cur.fetchone()
+        return pj(row["data"], {}) if row else None
+
+    async def record_assignment(self, a: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO ab_assignments (experiment_id, variant, user_id, loop_id, channel, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (a["experiment_id"], a["variant"], a["user_id"], a.get("loop_id"),
+             a.get("channel", ""), iso_now()),
+        )
+
+    async def assignment_counts(self, experiment_id: str, since: str | None = None) -> dict[str, int]:
+        assert self.db
+        sql = "SELECT variant, COUNT(DISTINCT user_id) c FROM ab_assignments WHERE experiment_id=?"
+        args: list[Any] = [experiment_id]
+        if since:
+            sql += " AND created_at>=?"
+            args.append(since)
+        sql += " GROUP BY variant"
+        cur = await self.db.execute(sql, args)
+        return {r["variant"]: r["c"] for r in await cur.fetchall()}
+
+    async def users_by_variant(self, experiment_id: str, variant: str) -> list[str]:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT DISTINCT user_id FROM ab_assignments WHERE experiment_id=? AND variant=?",
+            (experiment_id, variant))
+        return [r["user_id"] for r in await cur.fetchall()]
 
     # ---- 触点页面（H5/落地页）----
 
