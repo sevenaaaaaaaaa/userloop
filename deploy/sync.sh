@@ -52,8 +52,11 @@ tar xzf /tmp/userloop-sync.tar.gz -C /www/wwwroot/userloop
 cd /www/wwwroot/userloop
 find . -path ./.venv -prune -o -name __pycache__ -print0 | xargs -0 rm -rf 2>/dev/null || true
 systemctl restart userloop
-sleep 2
-systemctl is-active userloop
+for _ in $(seq 1 15); do systemctl is-active --quiet userloop && break; sleep 1; done
+if ! systemctl is-active --quiet userloop; then
+  echo "userloop 启动失败，最近日志："; journalctl -u userloop -n 25 --no-pager; exit 1
+fi
+echo "userloop: active"
 .venv/bin/python -m pytest tests/ -q 2>&1 | tail -1
 REMOTE
 
