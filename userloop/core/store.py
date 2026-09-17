@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_name ON events(event, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_user_event ON events(user_id, event);
 
 CREATE TABLE IF NOT EXISTS stage_transitions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +67,8 @@ CREATE TABLE IF NOT EXISTS loops (
 );
 CREATE INDEX IF NOT EXISTS idx_loops_user ON loops(user_id, template_id);
 CREATE INDEX IF NOT EXISTS idx_loops_status ON loops(status);
+CREATE INDEX IF NOT EXISTS idx_loops_template ON loops(template_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_loops_created ON loops(created_at);
 
 CREATE TABLE IF NOT EXISTS actions (
     id TEXT PRIMARY KEY,
@@ -106,6 +110,7 @@ CREATE TABLE IF NOT EXISTS canvas_runs (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_status ON canvas_runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_flow ON canvas_runs(flow_id, created_at);
 
 CREATE TABLE IF NOT EXISTS canvas_waits (
     id TEXT PRIMARY KEY,
@@ -145,10 +150,18 @@ class Store:
     async def connect(self) -> None:
         self.db = await aiosqlite.connect(self.path, isolation_level=None)
         self.db.row_factory = aiosqlite.Row
+        # 性能与并发（对齐 OpenFlow 教训）：WAL + NORMAL 同步 + 忙等，避免读写互堵
         await self.db.execute("PRAGMA journal_mode=WAL")
+        await self.db.execute("PRAGMA synchronous=NORMAL")
+        await self.db.execute("PRAGMA busy_timeout=5000")
         await self.db.execute("PRAGMA foreign_keys=ON")
+        await self.db.execute("PRAGMA cache_size=-8000")  # 8MB page cache
         await self.db.executescript(SCHEMA)
         await self.db.commit()
+        try:
+            await self.db.execute("PRAGMA optimize")
+        except aiosqlite.Error:
+            pass
 
     async def close(self) -> None:
         if self.db:
@@ -255,6 +268,46 @@ class Store:
         assert self.db
         cur = await self.db.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in await cur.fetchall()]
+
+    async def recent_events_for_user(self, user_id: str, limit: int = 10) -> list[dict]:
+        """单用户最近事件（走 idx_events_user，不在内存里全表过滤）。"""
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT * FROM events WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def newest_event_at(self) -> str | None:
+        """最新事件时间（极轻量，用于查询条件缓存/心跳判断）。"""
+        assert self.db
+        cur = await self.db.execute("SELECT created_at FROM events ORDER BY id DESC LIMIT 1")
+        row = await cur.fetchone()
+        return row["created_at"] if row else None
+
+    async def prune_events(self, retention_days: int = 180, noise_days: int = 7,
+                           noise_events: tuple[str, ...] = ("heartbeat",)) -> dict:
+        """保留策略（对齐 OpenFlow 教训：事件表不得无限增长）。
+
+        普通事件保留 retention_days 天；噪音类事件（心跳等）只留 noise_days 天。
+        """
+        from datetime import datetime, timedelta
+
+        assert self.db
+        cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"
+        noise_cut = (datetime.utcnow() - timedelta(days=noise_days)).isoformat(timespec="seconds") + "Z"
+        cur = await self.db.execute("DELETE FROM events WHERE created_at < ?", (cutoff,))
+        removed = cur.rowcount or 0
+        noise_removed = 0
+        if noise_events:
+            marks = ",".join("?" * len(noise_events))
+            cur = await self.db.execute(
+                f"DELETE FROM events WHERE event IN ({marks}) AND created_at < ?",
+                (*noise_events, noise_cut))
+            noise_removed = cur.rowcount or 0
+        try:
+            await self.db.execute("PRAGMA optimize")
+        except aiosqlite.Error:
+            pass
+        return {"removed": removed, "noise_removed": noise_removed, "cutoff": cutoff}
 
     # ---- stage transitions ----
 
@@ -367,6 +420,19 @@ class Store:
         assert self.db
         cur = await self.db.execute("SELECT * FROM actions WHERE loop_id=? ORDER BY seq", (loop_id,))
         return [dict(r) for r in await cur.fetchall()]
+
+    async def actions_for_loops(self, loop_ids: list[str]) -> dict[str, list[dict]]:
+        """批量取动作（消除 N+1：列表接口一次 WHERE IN 查完）。"""
+        assert self.db
+        out: dict[str, list[dict]] = {i: [] for i in loop_ids}
+        if not loop_ids:
+            return out
+        marks = ",".join("?" * len(loop_ids))
+        cur = await self.db.execute(
+            f"SELECT * FROM actions WHERE loop_id IN ({marks}) ORDER BY loop_id, seq", tuple(loop_ids))
+        for r in await cur.fetchall():
+            out.setdefault(r["loop_id"], []).append(dict(r))
+        return out
 
     # ---- canvas ----
 

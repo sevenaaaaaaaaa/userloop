@@ -73,8 +73,7 @@ async def userloop_journey(distinct_id: str) -> str:
             "transitions": [{"from": t["from_stage"], "to": t["to_stage"], "reason": t["reason"],
                              "at": t["created_at"]} for t in reversed(await store.list_transitions(user_id=uid, limit=20))],
             "recent_events": [{"event": e["event"], "at": e["created_at"]}
-                              for e in reversed(await store.list_events(limit=1000)[-10:])
-                              if e["user_id"] == uid],
+                              for e in await store.recent_events_for_user(uid, limit=10)],
             "loops": [{"id": l["id"], "template": l["template_id"], "status": l["status"]}
                       for l in await store.list_loops(limit=50) if l["user_id"] == uid],
         }

@@ -25,6 +25,7 @@ from userloop.core.scheduler import (
     verify_due_loops,
 )
 from userloop.core.store import Store, iso_now, pj
+from userloop.core.throttle import Throttle
 from userloop.server.auth import COOKIE_NAME, Sessions, auth_enabled, sid_from_cookie, verify_user
 
 
@@ -40,7 +41,10 @@ def create_app(data_dir: str | None = None) -> Any:
     store = Store(cfg["db_path"])
     ctx = ExecutorContext(cfg["data_dir"], cfg)
     sessions = Sessions()
+    throttle = Throttle()
     authed_mode = auth_enabled(cfg["data_dir"])
+    # 聚合看板缓存（10s TTL）：多标签页/多管理员不重复打库（对齐 OpenFlow 性能教训）
+    overview_cache: dict[str, Any] = {"ts": 0.0, "stamp": None, "data": None}
     web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
     app = FastAPI(title="UserLoop", version="0.1.0", description="全域自动化用户运营工具",
                   docs_url=None, redoc_url=None, redirect_slashes=False)
@@ -171,8 +175,15 @@ def create_app(data_dir: str | None = None) -> Any:
             events = normalize_batch(batch)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        results = [await handle(store, ctx, item) for item in events]
-        return JSONResponse({"accepted": len(results)})
+        accepted, throttled = 0, 0
+        for item in events:
+            # 入口限流（对齐 OpenFlow 教训）：同一用户同一事件高频重放静默丢弃，绝不写库
+            if not throttle.allow_event(str(item.get("distinct_id", "")), str(item.get("event", ""))):
+                throttled += 1
+                continue
+            await handle(store, ctx, item)
+            accepted += 1
+        return JSONResponse({"accepted": accepted, "throttled": throttled})
 
     @app.get(f"{prefix}/track.js", response_class=HTMLResponse)
     async def track_js(request: Request) -> HTMLResponse:
@@ -228,6 +239,48 @@ def create_app(data_dir: str | None = None) -> Any:
 
     # ---- 查询 API ----
 
+    async def _build_overview() -> tuple[dict, str]:
+        """构建聚合看板数据（含批量动作查询，消除 N+1）。"""
+        counts = await store.counts()
+        stages = await store.count_users_by_stage()
+        loop_status = await store.count_loops_by_status()
+        template_stats = await store.feedback_stats()
+        transitions = await store.list_transitions(limit=15)
+        loops = await store.list_loops(limit=12)
+        acts = await store.actions_for_loops([x["id"] for x in loops])
+        loops_out = [{**_hydr(x), "trigger": pj(x.get("trigger"), {}) or {},
+                      "actions": acts.get(x["id"], [])} for x in loops]
+        events = [_hydr(e) for e in await store.list_events(limit=14)]
+        users = [_hydr(u) for u in await store.list_users(limit=12)]
+        newest = await store.newest_event_at()
+        version = f"{counts.get('users')}-{counts.get('events')}-{counts.get('loops')}-{counts.get('feedback')}-{newest or ''}"
+        data = {"counts": counts, "stages": stages, "funnel": _funnel(stages),
+                "loop_status": loop_status, "template_stats": template_stats,
+                "recent_transitions": transitions, "loops": loops_out,
+                "events": events, "users": users}
+        return data, version
+
+    @app.get(f"{prefix}/api/v1/overview")
+    async def overview(request: Request, refresh: int = 0) -> JSONResponse:
+        """控制台单一聚合端点：1 次请求取代 5 个接口；10s TTL 缓存吸收多标签页轮询。"""
+        import time
+
+        now = time.monotonic()
+        if refresh or overview_cache["data"] is None or (now - overview_cache["ts"]) > 10:
+            data, version = await _build_overview()
+            overview_cache.update(ts=now, stamp=version, data=data)
+        return JSONResponse({
+            "me": _user(request) or {},
+            "overview": overview_cache["data"],
+            "stamp": overview_cache["stamp"],
+            "cached_for": round(now - overview_cache["ts"], 1),
+        })
+
+    @app.get(f"{prefix}/api/v1/heartbeat")
+    async def heartbeat(request: Request) -> JSONResponse:
+        """保活心跳：零 DB 访问（对齐 OpenFlow 教训：心跳不得打库）。"""
+        return JSONResponse({"ok": True, "ts": iso_now(), "authed": bool(_user(request))})
+
     @app.get(f"{prefix}/api/v1/dashboard")
     async def dashboard() -> JSONResponse:
         counts = await store.counts()
@@ -263,10 +316,8 @@ def create_app(data_dir: str | None = None) -> Any:
     @app.get(f"{prefix}/api/v1/loops")
     async def loops(status: str | None = None, limit: int = 100) -> JSONResponse:
         rows = await store.list_loops(status=status, limit=limit)
-        out = []
-        for loop in rows:
-            actions = await store.actions_for_loop(loop["id"])
-            out.append({**_hydr(loop), "actions": actions})
+        acts = await store.actions_for_loops([r["id"] for r in rows])  # 批量，消除 N+1
+        out = [{**_hydr(loop), "actions": acts.get(loop["id"], [])} for loop in rows]
         return JSONResponse({"count": len(out), "loops": out})
 
     @app.get(f"{prefix}/api/v1/events")

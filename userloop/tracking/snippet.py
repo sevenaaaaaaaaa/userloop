@@ -30,6 +30,9 @@ _TEMPLATE = """/* UserLoop Tracker v1 —— 嵌入：<script src="/track.js"></
     } catch (e) { return "s_inline"; }
   }
   var buf = [];
+  var MIN_FLUSH_MS = 5000;      // 上报节流：5 秒内最多一次网络请求（借鉴 OpenFlow 教训）
+  var lastFlush = 0, lastClick = 0, lastClickKey = "";
+  var hbCount = 0, HB_MAX = 20; // 活跃心跳：延迟 60s 启动、每 120s 一次、单页上限 20 次
   function track(event, props) {
     buf.push({
       distinct_id: uid(),
@@ -41,8 +44,11 @@ _TEMPLATE = """/* UserLoop Tracker v1 —— 嵌入：<script src="/track.js"></
     });
     if (buf.length >= 5) flush();
   }
-  function flush() {
+  function flush(force) {
     if (!buf.length) return;
+    var now = Date.now();
+    if (!force && (now - lastFlush) < MIN_FLUSH_MS) return;   // 节流：到点或凑够 5 条才发
+    lastFlush = now;
     var body = JSON.stringify({ events: buf.splice(0) });
     if (navigator.sendBeacon) {
       navigator.sendBeacon(EP, new Blob([body], { type: "application/json" }));
@@ -50,20 +56,32 @@ _TEMPLATE = """/* UserLoop Tracker v1 —— 嵌入：<script src="/track.js"></
       fetch(EP, { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true });
     }
   }
-  window.userloop = { track: track, flush: flush, uid: uid, session: sid };
+  window.userloop = { track: track, flush: function(){ flush(true); }, uid: uid, session: sid };
   track("page_view", { page: location.pathname, ref: document.referrer, title: document.title });
   document.addEventListener("click", function (e) {
     var el = e.target.closest("[data-ul-track],a,button");
     if (!el) return;
+    // 连点去重：同一元素 1 秒内只记 1 次
+    var key = (el.getAttribute("data-ul-track") || el.tagName + ":" + (el.textContent || "").slice(0, 20));
+    var now = Date.now();
+    if (key === lastClickKey && (now - lastClick) < 1000) return;
+    lastClick = now; lastClickKey = key;
     track("element_click", {
-      page: location.pathname,
-      tag: el.tagName.toLowerCase(),
-      text: (el.textContent || "").slice(0, 40),
-      label: el.getAttribute("data-ul-track") || ""
+      page: location.pathname, tag: el.tagName.toLowerCase(),
+      text: (el.textContent || "").slice(0, 40), label: el.getAttribute("data-ul-track") || ""
     });
   }, true);
-  window.addEventListener("beforeunload", flush);
-  setInterval(flush, 10000);
+  window.addEventListener("pagehide", function(){ flush(true); });
+  window.addEventListener("beforeunload", function(){ flush(true); });
+  setInterval(flush, 15000);
+  setTimeout(function () {
+    var t = setInterval(function () {
+      if (hbCount >= HB_MAX) { clearInterval(t); return; }
+      hbCount++;
+      track("heartbeat", { session_heartbeat: hbCount });
+      flush(true);
+    }, 120000);
+  }, 60000);
 })();
 """
 

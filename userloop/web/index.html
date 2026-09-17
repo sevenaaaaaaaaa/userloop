@@ -77,7 +77,7 @@
       <h1>运营总览</h1>
       <div class="sub">用户旅程自动形成 Loop · 全域数据中枢</div>
       <div class="sp"></div>
-      <button class="btn ghost sm" onclick="load()">立即刷新</button>
+      <button class="btn ghost sm" onclick="load(true)">立即刷新</button>
       <span class="tag mono" id="ts">—</span>
     </div>
 
@@ -159,10 +159,36 @@ function bar(label,value,max,extra){
   return `<div class="fn-row"><div class="fn-l">${label}</div><div class="fn-t"><div class="fn-f" style="width:${pct}%"></div></div><div class="fn-n">${value}</div></div>${extra?`<div class="fn-row"><div class="fn-l"></div><div class="fn-t" style="height:auto;background:none"><span class="fn-rate">${extra}</span></div><div></div></div>`:''}`;
 }
 
-async function load(){
-  const [d, loops, events, users, me] = await Promise.all([
-    j('api/v1/dashboard'), j('api/v1/loops?limit=12'), j('api/v1/events?limit=14'), j('api/v1/users?limit=12'), j('api/auth/me')
-  ]);
+let lastStamp = null, pollMs = 60000, fails = 0;
+let hbLast = 0;
+async function heartbeat(){
+  // 保活心跳：最多 5 分钟一次，页面不可见时完全不发（借鉴 OpenFlow 心跳频率控制）
+  const now = Date.now();
+  if (document.hidden || now - hbLast < 300000) return;
+  hbLast = now;
+  try { await fetch('api/v1/heartbeat'); } catch(e){}
+}
+
+async function load(force){
+  try{
+    const r = await j('api/v1/overview' + (force ? '?refresh=1' : ''));
+    if (!r.overview) return;
+    r.force = force;
+    fails = 0; pollMs = 60000;
+    render(r);
+    heartbeat();
+  }catch(e){
+    fails++;
+    // 退避：60s → 120s → 240s → 300s 上限（服务器/网络异常时不加剧压力）
+    pollMs = Math.min(60000 * Math.pow(2, Math.min(fails, 3)), 300000);
+  }
+}
+
+function render(r){
+  // 数据未变化则不重绘（避免 DOM 抖动与滚动跳动）
+  if (r.stamp === lastStamp && !r.force) { $('ts').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false}) + ' · 无变化'; return; }
+  lastStamp = r.stamp;
+  const d = r.overview, me = r.me || {};
   $('me-name').textContent = me.login || me.username || '—';
   $('me-chip').title = (me.name||'') + ' · ' + (me.role||'') + '（' + (me.login||'') + '）';
   $('ts').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false});
@@ -197,7 +223,7 @@ async function load(){
     '<div style="color:var(--faint);font-size:var(--fs-md)">暂无 Loop 运行</div>';
 
   const tstats = d.template_stats||{};
-  const names = {}; (loops.loops||[]).forEach(l=>{ if(l.template) names[l.template_id]=l.template.name; });
+  const names = {}; (d.loops||[]).forEach(l=>{ if(l.template) names[l.template_id]=l.template.name; });
   const rows = Object.entries(tstats).map(([tid,v])=>{
     const e=v.effective||0, n=v.neutral||0, tot=e+n;
     const rate = tot? Math.round(e/tot*100)+'%' : '—';
@@ -212,7 +238,7 @@ async function load(){
     <td style="color:var(--muted)">${t.reason||''}</td><td class="mono" style="color:var(--faint)">${fmt(t.created_at)}</td></tr>`).join('')
     || '<tr><td colspan="4" style="color:var(--faint)">暂无迁移</td></tr>';
 
-  $('loops').innerHTML = (loops.loops||[]).map(l=>{
+  $('loops').innerHTML = (d.loops||[]).map(l=>{
     const trig = l.trigger && l.trigger.event ? l.trigger.event : (l.trigger && l.trigger.stage ? '→'+l.trigger.stage : (l.trigger && l.trigger.days ? l.trigger.days+'d 无事件' : (l.trigger&&l.trigger.type)||'—'));
     const acts = (l.actions||[]).map(a=>`<span class="tag mono s-${a.status}">${a.type}</span>`).join(' ');
     return `<tr><td class="mono">${(l.id||'').slice(0,14)}</td><td>${l.template?l.template.name:l.template_id}</td>
@@ -220,7 +246,7 @@ async function load(){
       <td class="mono" style="color:var(--faint)">${fmt(l.created_at)}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--faint)">暂无 Loop</td></tr>';
 
-  $('users').innerHTML = (users.users||[]).map(u=>{
+  $('users').innerHTML = (d.users||[]).map(u=>{
     const st=u.stats||{};
     return `<tr><td class="mono">${u.distinct_id}</td><td>${u.email||'—'}</td>
       <td><span class="tag ${u.stage==='paying'||u.stage==='retained'||u.stage==='advocate'?'ok':u.stage==='visitor'?'':'accent'}">${STAGE_LABEL[u.stage]||u.stage}</span></td>
@@ -228,14 +254,15 @@ async function load(){
       <td class="mono" style="color:var(--faint)">${fmt(u.last_seen)}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--faint)">暂无用户</td></tr>';
 
-  $('events').innerHTML = (events.events||[]).map(e=>`
+  $('events').innerHTML = (d.events||[]).map(e=>`
     <div class="row"><div class="ic">${(e.source||'·').slice(0,2)}</div>
       <div class="b"><div class="t">${e.event}</div><div class="d">${e.distinct_id}</div></div>
       <div class="tm">${fmt(e.created_at)}</div></div>`).join('')
     || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
-
-  setTimeout(load, 30000);
 }
+
+function schedule(){ setTimeout(async ()=>{ if(!document.hidden) await load(); else schedule(); schedule(); }, pollMs); }
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
 
 // 侧栏高亮：跟随滚动，取最后一个越过顶部的分区
 const secs=[...document.querySelectorAll('main section[id]')];
@@ -251,6 +278,7 @@ document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.addEventListen
 
 syncNav();
 load();
+schedule();
 </script>
 </body>
 </html>

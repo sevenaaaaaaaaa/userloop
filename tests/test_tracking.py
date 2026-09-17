@@ -51,10 +51,11 @@ def test_track_endpoint_and_trackjs(tmp_path) -> None:
         ]})
         assert r.status_code == 200
         assert r.json()["accepted"] == 2
-        # 幂等
+        # 幂等 + 限流：重复的 page_view 在 3 秒窗口内被静默丢弃（不写库）
         r2 = client.post("/api/v1/track", json={"events": [
             {"distinct_id": "w1", "event": "page_view", "props": {"page": "/"}, "event_id": "w-1"}]})
-        assert r2.json()["accepted"] == 1  # 重复 event_id 仍计入 accepted 但事件去重
+        assert r2.json()["accepted"] == 0
+        assert r2.json()["throttled"] == 1
         users = client.get("/api/v1/users").json()
         assert users["count"] == 1
         # 埋点脚本可下载

@@ -115,13 +115,33 @@ async def resume_canvas_waits(store: Store, ctx: ExecutorContext) -> list[dict]:
     return await canvas.resume_waits(store, ctx)
 
 
+async def prune_data(store: Store, retention_days: int = 180, min_interval_hours: int = 24) -> dict:
+    """保留策略（对齐 OpenFlow 教训：事件表不得无限增长）。
+
+    默认每 24h 最多跑一次；事件保留 180 天，噪音类（heartbeat）仅 7 天。
+    """
+    now = _utcnow()
+    last = getattr(store, "_last_prune", None)
+    if last and (now - last).total_seconds() < min_interval_hours * 3600:
+        return {"skipped": True, "next_in_h": round(min_interval_hours - (now - last).total_seconds() / 3600, 1)}
+    result = await store.prune_events(retention_days=retention_days)
+    store._last_prune = now  # type: ignore[attr-defined]
+    return result
+
+
 def build_scheduler(store: Store, ctx: ExecutorContext):
     """APScheduler 常驻编排（server 模式使用）。"""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     sched = AsyncIOScheduler(timezone="UTC")
-    sched.add_job(process_due_actions, "interval", seconds=30, args=[store, ctx], id="actions")
-    sched.add_job(sweep_inactivity, "interval", minutes=30, args=[store], id="inactivity")
-    sched.add_job(verify_due_loops, "interval", minutes=5, args=[store], id="verify")
-    sched.add_job(resume_canvas_waits, "interval", seconds=30, args=[store, ctx], id="canvas_waits")
+    sched.add_job(process_due_actions, "interval", seconds=30, args=[store, ctx], id="actions",
+                  max_instances=1, coalesce=True)
+    sched.add_job(sweep_inactivity, "interval", minutes=30, args=[store], id="inactivity",
+                  max_instances=1, coalesce=True)
+    sched.add_job(verify_due_loops, "interval", minutes=5, args=[store], id="verify",
+                  max_instances=1, coalesce=True)
+    sched.add_job(resume_canvas_waits, "interval", seconds=30, args=[store, ctx], id="canvas_waits",
+                  max_instances=1, coalesce=True)
+    sched.add_job(prune_data, "interval", hours=6, args=[store], id="prune",
+                  max_instances=1, coalesce=True)
     return sched
