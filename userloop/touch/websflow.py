@@ -72,32 +72,79 @@ def build_page_data(spec_title: str, spec_body: str, cta_text: str, cta_link: st
     return {"segments": pz.segments(), "pages": [{"id": "main", "name": "首页", "slug": "", "blocks": blocks}]}
 
 
-async def create_and_publish(cfg: dict, name: str, data: dict, description: str = "",
-                             transport: Any = None) -> dict[str, Any]:
-    """建项目并发布，返回 {ok, url, share_token, project_id, error}。"""
+async def unpublish_other_projects(cfg: dict, token: str, keep_id: str | None = None,
+                                   transport: Any = None) -> int:
+    """发布额度不足时，先下架我们自己的其他已发布项目（保持 1 个在线）。"""
     base = str(cfg.get("api_base") or "").rstrip("/")
-    public_base = str(cfg.get("public_base") or "").rstrip("/")
-    mode = str(cfg.get("project_mode") or "h5")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    freed = 0
+    try:
+        async with httpx.AsyncClient(timeout=15, transport=transport) as client:
+            resp = await client.get(f"{base}/projects", headers=headers)
+            for p in (resp.json().get("projects") or []):
+                if p.get("published") and p.get("id") != keep_id:
+                    await client.post(f"{base}/projects/{p['id']}/unpublish", headers=headers)
+                    freed += 1
+    except Exception:  # noqa: BLE001
+        return freed
+    return freed
+
+
+async def publish_project(cfg: dict, project_id: str, token: str, transport: Any = None) -> dict[str, Any]:
+    """发布项目；额度不足时自动下架我们的旧页后重试。"""
+    base = str(cfg.get("api_base") or "").rstrip("/")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    async def _publish() -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=20, transport=transport) as client:
+            r = await client.post(f"{base}/projects/{project_id}/publish", headers=headers)
+            d = r.json() if r.status_code == 200 else {}
+            if d.get("token"):
+                return {"ok": True, "share_token": d["token"]}
+            return {"ok": False, "error": d.get("error") or f"HTTP {r.status_code}", "quota": bool(d.get("quota"))}
+
+    res = await _publish()
+    if not res.get("ok") and res.get("quota"):
+        await unpublish_other_projects(cfg, token, keep_id=project_id, transport=transport)
+        res = await _publish()
+    return res
+
+
+async def create_project(cfg: dict, name: str, data: dict, description: str = "",
+                         transport: Any = None) -> dict[str, Any]:
+    """建项目（不发布）；返回 {ok, project_id, token, error}。"""
+    base = str(cfg.get("api_base") or "").rstrip("/")
     token = await login(cfg, transport=transport)
     if not token:
         return {"ok": False, "error": "WebsFlow 登录失败（检查 api_base/email/password）"}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    mode = str(cfg.get("project_mode") or "h5")
     try:
         async with httpx.AsyncClient(timeout=20, transport=transport) as client:
             r1 = await client.post(f"{base}/projects",
                                    json={"name": name, "mode": mode, "data": data, "description": description},
                                    headers=headers)
             d1 = r1.json() if r1.status_code in (200, 201) else {}
-            project = d1.get("project") or {}
-            pid = project.get("id")
+            pid = (d1.get("project") or {}).get("id")
             if not pid:
-                return {"ok": False, "error": d1.get("error") or f"建项目失败 HTTP {r1.status_code}"}
-            r2 = await client.post(f"{base}/projects/{pid}/publish", headers=headers)
-            d2 = r2.json() if r2.status_code == 200 else {}
-            share = d2.get("token") or project.get("share_token")
-            if not share:
-                return {"ok": False, "error": d2.get("error") or f"发布失败 HTTP {r2.status_code}", "project_id": pid}
-        url = f"{public_base}/{share}"
-        return {"ok": True, "url": url, "share_token": share, "project_id": pid}
+                return {"ok": False, "error": d1.get("error") or f"建项目失败 HTTP {r1.status_code}",
+                        "quota": bool(d1.get("quota"))}
+        return {"ok": True, "project_id": pid, "token": token}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"WebsFlow 调用失败：{exc}"}
+
+
+async def create_and_publish(cfg: dict, name: str, data: dict, description: str = "",
+                             transport: Any = None) -> dict[str, Any]:
+    """建项目并发布，返回 {ok, url, share_token, project_id, error}。"""
+    public_base = str(cfg.get("public_base") or "").rstrip("/")
+    created = await create_project(cfg, name, data, description, transport=transport)
+    if not created.get("ok"):
+        return created
+    pub = await publish_project(cfg, created["project_id"], created["token"], transport=transport)
+    if not pub.get("ok"):
+        return {"ok": False, "error": pub.get("error") or "发布失败",
+                "project_id": created["project_id"], "quota": pub.get("quota")}
+    share = pub["share_token"]
+    return {"ok": True, "url": f"{public_base}/{share}", "share_token": share,
+            "project_id": created["project_id"]}

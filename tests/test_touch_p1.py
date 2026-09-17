@@ -269,8 +269,17 @@ async def test_h5_driver_uses_websflow(tmp_path, monkeypatch) -> None:
                                                      "cta_url": "https://nownexts.com/pricing"}},
                                    {"id": "loop_wf", "template_id": "tpl"}, u)
         assert res["ok"] and res["provider"] == "websflow"
-        assert res["url"] == "https://nownexts.com/webflow/p/sh9"
+        assert res["url"].startswith("https://nownexts.com/webflow/p/sh9")   # campaign 链接带阶段参数
         assert res.get("degraded") in (False, None)
+        assert res["campaign_key"] == "tpl"
+
+        # 第二次交付（别的用户）应复用同一 campaign 链接，不新建项目
+        u2 = await store.upsert_user("wf2", email="wf2@x.com")
+        res2 = await execute_action(ctx, {"type": "touch.h5",
+                                          "payload": {"title": "权益", "text": "详情", "cta_text": "领取",
+                                                      "cta_url": "https://nownexts.com/pricing"}},
+                                    {"id": "loop_wf2", "template_id": "tpl"}, u2)
+        assert res2["reused"] is True and res2["url"].split("?")[0] == res["url"].split("?")[0]
     finally:
         await store.close()
 

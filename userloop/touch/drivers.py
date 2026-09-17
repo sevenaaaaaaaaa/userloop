@@ -124,25 +124,39 @@ class H5Driver:
                 "cta_text": spec.cta_text, "cta_url": spec.cta_url,
             })
 
-        # 1) 首选：WebsFlow 后台生成托管页
+        # 1) 首选：WebsFlow 后台（campaign 模式：一个 campaign 一条链接，所有人复用 → 真正千人千面）
+        mode = str(h5_cfg.get("mode") or "campaign")
         if str(h5_cfg.get("provider") or "") == "websflow" and h5_cfg.get("api_base"):
             from userloop.touch import websflow
 
             stage = str(user.get("stage") or "visitor")
             urg = stage in ("paying", "churn_risk", "churned")
+            campaign_key = str(h5_cfg.get("campaign_key") or spec.template_id or spec.loop_id or "default")
+            existing = await store.get_campaign_page(campaign_key) if (store is not None and mode == "campaign") else None
+            if existing:
+                # 已存在：复用同一链接，按访客维度千人千面（并带上阶段/用户标识供补丁与归因）
+                url = f"{existing['url']}?utm_content=stage-{stage}&utm_medium=userloop"
+                return TouchResult(True, self.channel, ref=url,
+                                   extra={"url": url, "page_id": page_id, "provider": "websflow",
+                                          "reused": True, "campaign_key": campaign_key})
+
             data = websflow.build_page_data(
                 spec_title=spec.title, spec_body=spec.body, cta_text=spec.cta_text,
-                cta_link=click_url, goal_id=f"ul-{spec.loop_id or page_id}",
+                cta_link=click_url, goal_id=f"ul-{campaign_key}",
                 brand=str(touch_cfg.get("brand") or ""), mode=str(h5_cfg.get("project_mode") or "h5"),
                 stage=stage, urg=urg)
             res = await websflow.create_and_publish(
-                h5_cfg, name=f"UserLoop · {spec.title or page_id}"[:60], data=data,
-                description=f"UserLoop 旅程触点 loop={spec.loop_id} user={user['id']}",
+                h5_cfg, name=f"UserLoop · {campaign_key}"[:60], data=data,
+                description=f"UserLoop campaign={campaign_key}（千人千面）",
                 transport=(spec.vars or {}).get("_transport"))
             if res.get("ok"):
-                return TouchResult(True, self.channel, ref=res["url"],
-                                   extra={"url": res["url"], "page_id": page_id,
-                                          "provider": "websflow", "project_id": res.get("project_id")})
+                if store is not None and mode == "campaign":
+                    await store.put_campaign_page(campaign_key, res.get("project_id", ""),
+                                                  res.get("share_token", ""), res["url"])
+                url = f"{res['url']}?utm_content=stage-{stage}&utm_medium=userloop" if mode == "campaign" else res["url"]
+                return TouchResult(True, self.channel, ref=url,
+                                   extra={"url": url, "page_id": page_id, "provider": "websflow",
+                                          "campaign_key": campaign_key, "project_id": res.get("project_id")})
             note = res.get("error") or "WebsFlow 生成失败"
         else:
             note = "未配置 WebsFlow（h5.provider=websflow），使用内置页"
