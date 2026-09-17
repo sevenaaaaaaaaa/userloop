@@ -171,10 +171,16 @@ def db_status(data_dir: str | None) -> None:
             storage = ((cfg.get("storage") or {}).get("events") or {})
             console.print(f"events 后端: [bold]{backend}[/]  配置: {storage.get('backend', 'auto')}"
                           + (f"  降级原因: {reason}" if reason else ""))
-            console.print(f"SQLite: {cfg['db_path']}  |  "
-                          + "  ".join(f"{k}={v}" for k, v in counts.items()))
+            sqlite_events = 0
+            try:
+                cur = await store.db.execute("SELECT COUNT(*) c FROM events")
+                sqlite_events = int((await cur.fetchone())["c"])
+            except Exception:  # noqa: BLE001
+                pass
+            console.print(f"SQLite(兜底/备份): {cfg['db_path']}  events={sqlite_events}  |  "
+                          + "  ".join(f"{k}={v}" for k, v in counts.items() if k != "events"))
             if backend.startswith("mysql"):
-                console.print(f"MySQL events 行数: {await store.events.total()}")
+                console.print(f"MySQL events 行数（主用）: {await store.events.total()}")
         finally:
             await store.close()
 
@@ -199,12 +205,17 @@ def db_migrate_events(data_dir: str | None, keep_sqlite: bool) -> None:
             return
         store = Store(cfg["db_path"], cfg)
         await store.connect()
+        mysql = MySqlEventStore(mysql_cfg)
         try:
-            result = await migrate_events_sqlite_to_mysql(store.db, MySqlEventStore(mysql_cfg))
+            result = await migrate_events_sqlite_to_mysql(store.db, mysql)
             console.print(f"迁移完成: {result}")
             if not keep_sqlite:
                 console.print("（已选择不保留 SQLite 存量；如需清理请手动归档 data/*.db）")
         finally:
+            try:
+                await mysql.close()   # 迁移用连接池显式关闭（否则事件循环关闭时报错）
+            except Exception:  # noqa: BLE001
+                pass
             await store.close()
 
     asyncio.run(_run())

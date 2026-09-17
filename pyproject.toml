@@ -20,6 +20,7 @@ dependencies = [
     "bcrypt>=4.1",
     "mcp>=1.2,<2",
     "aiomysql>=0.2",
+    "pymysql>=1.1,<2",
 ]
 
 [project.optional-dependencies]

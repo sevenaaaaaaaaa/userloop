@@ -26,6 +26,11 @@ from typing import Any, Protocol
 
 import aiosqlite
 
+try:  # MySQL 驱动可选：未安装则自动降级 SQLite
+    import aiomysql
+except ImportError:  # pragma: no cover
+    aiomysql = None  # type: ignore[assignment]
+
 EVENTS_DDL_SQLITE = """
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,8 +170,8 @@ class MySqlEventStore:
         self.pool: Any = None
 
     async def connect(self) -> None:
-        import aiomysql
-
+        if aiomysql is None:
+            raise RuntimeError("aiomysql 未安装（pip install aiomysql）")
         self.pool = await aiomysql.create_pool(
             host=self.cfg.get("host", "127.0.0.1"), port=int(self.cfg.get("port", 3306)),
             user=self.cfg.get("user", "userloop"), password=self.cfg.get("password", ""),
@@ -193,8 +198,6 @@ class MySqlEventStore:
                 return cur.rowcount
 
     async def insert(self, e: dict) -> int | None:
-        import aiomysql
-
         try:
             return await self._exec(
                 "INSERT INTO events (user_id, distinct_id, event, props, source, event_id, created_at) "
@@ -285,7 +288,8 @@ async def build_event_store(cfg: dict[str, Any], sqlite_conn: aiosqlite.Connecti
 async def migrate_events_sqlite_to_mysql(sqlite_conn: aiosqlite.Connection, mysql: MySqlEventStore,
                                          batch: int = 500) -> dict:
     """把 SQLite events 全量回填到 MySQL（按 event_id 幂等，可重复执行）。"""
-    await mysql.connect()
+    if mysql.pool is None:
+        await mysql.connect()
     cur = await sqlite_conn.execute("SELECT COUNT(*) c FROM events")
     total = int((await cur.fetchone())["c"])
     copied = 0
