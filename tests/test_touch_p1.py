@@ -181,3 +181,95 @@ def test_h5_page_missing(tmp_path) -> None:
     app = create_app(str(tmp_path))
     with TestClient(app) as client:
         assert client.get("/t/p/nope?t=bad").status_code == 404
+
+
+# ── WebsFlow 富页面（用其后台能力生成托管页）──
+
+def test_websflow_page_data_shape() -> None:
+    from userloop.touch import websflow
+
+    data = websflow.build_page_data("你的专属权益", "第一段\n第二段", "立即领取",
+                                   "https://ul.test/t/p/pg1/go?t=tok", goal_id="ul-loop1", brand="芭乐派")
+    blocks = data["pages"][0]["blocks"]
+    types = [b["type"] for b in blocks]
+    assert types[0] == "hero" and "cta" in types and "footer" in types
+    hero = blocks[0]["props"]
+    assert hero["title"] == "你的专属权益" and hero["btnLink"].endswith("/go?t=tok")
+    cta = next(b for b in blocks if b["type"] == "cta")
+    assert cta["props"]["goalId"] == "ul-loop1" and cta["props"]["btnText"] == "立即领取"
+
+
+async def test_websflow_create_and_publish(monkeypatch) -> None:
+    from userloop.touch import websflow
+
+    websflow._TOKEN_CACHE.clear()
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if "/users/login" in str(request.url):
+            return httpx.Response(200, json={"token": "jwt-1"})
+        if str(request.url).endswith("/projects"):
+            body = json.loads(request.read())
+            assert body["mode"] == "h5" and body["data"]["pages"][0]["blocks"]
+            return httpx.Response(201, json={"project": {"id": "prj-1"}})
+        if "/publish" in str(request.url):
+            return httpx.Response(200, json={"token": "share-9", "url": "/webflow/p/share-9"})
+        return httpx.Response(404)
+
+    cfg = {"api_base": "http://wf.test/api", "public_base": "https://nownexts.com/webflow/p",
+           "email": "bot@x.com", "password": "pw", "project_mode": "h5"}
+    res = await websflow.create_and_publish(cfg, "测试页", {"pages": [{"id": "main", "blocks": [
+        {"id": "b1", "type": "hero", "props": {"title": "t"}}]}]},
+        transport=httpx.MockTransport(handler))
+    assert res["ok"] and res["url"] == "https://nownexts.com/webflow/p/share-9"
+    assert res["project_id"] == "prj-1"
+    assert any("/users/login" in c for c in calls)
+
+
+async def test_h5_driver_uses_websflow(tmp_path, monkeypatch) -> None:
+    """配置 provider=websflow 时应产出 WebsFlow 托管页链接（而非内置页）。"""
+    from userloop.core.store import Store
+    from userloop.touch import websflow
+
+    websflow._TOKEN_CACHE.clear()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        u = str(request.url)
+        if "/users/login" in u:
+            return httpx.Response(200, json={"token": "jwt"})
+        if u.endswith("/projects"):
+            return httpx.Response(201, json={"project": {"id": "p9"}})
+        if "/publish" in u:
+            return httpx.Response(200, json={"token": "sh9"})
+        return httpx.Response(404)
+
+    store = Store(str(tmp_path / "wf.db"), {})
+    await store.connect()
+    try:
+        u = await store.upsert_user("wf1", email="wf@x.com")
+        ctx = ExecutorContext(str(tmp_path), {
+            "touch": {"track_secret": "s", "public_base": "https://ul.test", "brand": "芭乐派",
+                      "h5": {"provider": "websflow", "api_base": "http://wf.test/api",
+                             "public_base": "https://nownexts.com/webflow/p",
+                             "email": "bot@x.com", "password": "pw"}},
+            "api_token": "s"})
+        ctx.store = store
+        # 注入 MockTransport 到 websflow 客户端调用链
+        real_client = __import__("httpx").AsyncClient
+
+        class Patched(real_client):
+            def __init__(self, *a, **kw):
+                kw["transport"] = httpx.MockTransport(handler)
+                super().__init__(*a, **kw)
+
+        monkeypatch.setattr(websflow.httpx, "AsyncClient", Patched)
+        res = await execute_action(ctx, {"type": "touch.h5",
+                                         "payload": {"title": "权益", "text": "详情", "cta_text": "领取",
+                                                     "cta_url": "https://nownexts.com/pricing"}},
+                                   {"id": "loop_wf", "template_id": "tpl"}, u)
+        assert res["ok"] and res["provider"] == "websflow"
+        assert res["url"] == "https://nownexts.com/webflow/p/sh9"
+        assert res.get("degraded") in (False, None)
+    finally:
+        await store.close()
