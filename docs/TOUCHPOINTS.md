@@ -108,8 +108,18 @@ UserLoop 自持追踪端点（保证闭环数据自主）：
 | **P1（本轮已完成）** | 短信直连（阿里云/腾讯云/通用网关，含合规退订指令）+ H5 自持动态页（签名 URL + 打开/点击追踪回流） | ✅ 短信链路端到端验证（网关回声收到带「回T退订」的正文）；H5 页线上可打开、CTA 302、`h5_view`/`h5_click` 回流 |
 | **P1（待凭据）** | 阿里云/腾讯云短信**正式发送**；公众号模板消息；企微应用消息 | 需：短信签名/模板报备 + AK/SK；公众号认证服务号（模板消息）；企微自建应用（secret） |
 | **P2（A/B 已完成）** | **A/B 版式实验**：稳定分桶 → 内容槽位覆盖 → 打开/点击/转化按变体归因 → 双比例 z 检验 → winner 提升（写 feedback） | ✅ 线上实测：40 人 20/20 分桶、B 组 click_rate 0.5 vs A 0.2、置信 0.9533 判 winner、提升后新用户恒发 winner |
-| **P2（待做）** | WebsFlow 富页面构建器（模块化/千人千面投放页）接入 `touch.h5` 富页面模式；企微 1v1/客户群 | 富页面链接可投放且事件回流 |
+| **P2（WebsFlow 已完成）** | `touch.h5` 直连 **WebsFlow 后台**：建项目 → 发布 → SSR 托管页链接；CTA 走 UserLoop 追踪跳转；区块级内容槽位（hero/text/cta/footer） | ✅ 线上实测：公网页可开（115KB SSR）、CTA 302 到目标、`h5_click` 回流 |
+| **P2（待做）** | WebsFlow 千人千面（区块 `audience` 规则：设备/UTM/时段/分群）、模板体系（多套版式）、企微 1v1/客户群 | 按访客维度出不同内容且可测 |
 | **P3** | 内容资产中心（模板版本化/审批/预览）、发件域预热与配额治理、多语言触点 | 模板变更可灰度；发件域预热曲线可控 |
+
+### WebsFlow 集成细节（2026-09-17）
+
+- **接口**（已实测）：`POST /webflow/api/users/login` → JWT；`POST /projects {name,mode,data}`；`POST /projects/{id}/publish` → `{token}`；公网页 `https://nownexts.com/webflow/p/<token>`（Apache 已反代 → :3001）
+- **区块契约**：`blocks:[{id,type,variant?,props,audience?}]`；本次用 `hero/text/cta/footer`（modes 含 h5）
+- **内容槽位 → 区块 props**：标题/正文/CTA 文案映射进 hero/text/cta；`cta.props.goalId` 供其统计端点记转化
+- **追踪闭环**：所有 CTA 指向 UserLoop `/t/p/<page_id>/go?t=<签名>` → 记 `h5_click` 并 302 到目标（与内置页同一套追踪）
+- **服务账号**：`userloop-bot@nownexts.com`（JWT 缓存 6h），凭据存 `data/websflow-bot.txt`（600）
+- **兜底**：未配置 WebsFlow 或调用失败 → 自动降级内置动态页（degraded + note），闭环不中断
 
 ### P2 A/B 实验细节（2026-09-17）
 
