@@ -381,6 +381,25 @@ def create_app(data_dir: str | None = None) -> Any:
     @app.get(f"{prefix}/t/e/unsubscribe", response_class=HTMLResponse)
     async def touch_unsubscribe(request: Request) -> HTMLResponse:
         data = await _touch_event(request, "email_unsubscribed")
+        # 同步 OpenFlow 抑制名单（永久不再发，保护发件声誉）
+        if data:
+            mail = (cfg.get("touch") or {}).get("email") or {}
+            bridge_token = mail.get("bridge_token") or ((cfg.get("integrations") or {}).get("openflow") or {}).get("bridge_token")
+            base = mail.get("bridge_url") or ((cfg.get("integrations") or {}).get("openflow") or {}).get("base_url")
+            to = ""
+            user = await store.get_user(data.get("u", ""))
+            if user:
+                to = user.get("email") or ""
+            if base and bridge_token and to:
+                import httpx
+
+                try:
+                    async with httpx.AsyncClient(timeout=8) as client:
+                        await client.post(f"{str(base).rstrip('/')}/api/plugin/userloop-bridge/suppress",
+                                          json={"email": to, "reason": "userloop_unsubscribe"},
+                                          headers={"X-UserLoop-Bridge": str(bridge_token)})
+                except Exception:  # noqa: BLE001 —— 抑制同步失败不影响退订本身
+                    pass
         body = ("已为你退订，将不再收到此类邮件。" if data
                 else "链接已失效或签名无效，如需退订请联系客服。")
         return HTMLResponse(f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
