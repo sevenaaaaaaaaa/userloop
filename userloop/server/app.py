@@ -334,6 +334,60 @@ def create_app(data_dir: str | None = None) -> Any:
         rows = await store.list_events(limit=limit)
         return JSONResponse({"count": len(rows), "events": [_hydr(e) for e in rows]})
 
+    # ---- 触点回执（邮件打开/点击/退订；公开端点，自持追踪保证闭环数据自主）----
+
+    async def _touch_event(request: Request, event: str, extra: dict | None = None) -> dict | None:
+        from userloop.touch.base import read_token
+
+        secret = str((cfg.get("touch") or {}).get("track_secret") or cfg.get("api_token") or "userloop")
+        data = read_token(secret, request.query_params.get("t", ""))
+        if not data:
+            return None
+        user = await store.get_user(data.get("u", ""))
+        if not user:
+            return None
+        props = {"loop_id": data.get("l") or "", "template_id": (data.get("x") or {}).get("t") or "",
+                 "channel": "email", "goal": (data.get("x") or {}).get("g") or ""}
+        if extra:
+            props.update(extra)
+        try:
+            await handle(store, ctx, {"distinct_id": user["distinct_id"], "event": event,
+                                      "props": props, "source": "touch",
+                                      "event_id": f"{event}:{data.get('u')}:{data.get('l')}:{props.get('url','')}"[:180]})
+        except ValueError:
+            pass
+        return data
+
+    @app.get(f"{prefix}/t/e/open.gif")
+    async def touch_open(request: Request) -> Any:
+        from fastapi.responses import Response
+
+        await _touch_event(request, "email_open")
+        pixel = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+                 b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")
+        return Response(content=pixel, media_type="image/gif",
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+    @app.get(f"{prefix}/t/e/click")
+    async def touch_click(request: Request) -> Any:
+        from fastapi.responses import RedirectResponse
+
+        target = request.query_params.get("u", "") or "/"
+        await _touch_event(request, "email_click", {"url": target[:500]})
+        if not target.lower().startswith(("http://", "https://")):
+            target = "/"
+        return RedirectResponse(target, status_code=302)
+
+    @app.get(f"{prefix}/t/e/unsubscribe", response_class=HTMLResponse)
+    async def touch_unsubscribe(request: Request) -> HTMLResponse:
+        data = await _touch_event(request, "email_unsubscribed")
+        body = ("已为你退订，将不再收到此类邮件。" if data
+                else "链接已失效或签名无效，如需退订请联系客服。")
+        return HTMLResponse(f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>退订</title></head>
+<body style="font-family:-apple-system,'PingFang SC',sans-serif;padding:60px 20px;text-align:center;color:#1f2937">
+<h2 style="font-size:18px">邮件退订</h2><p style="color:#6b7280">{body}</p></body></html>""")
+
     # ---- Canvas 编排 API ----
 
     @app.get(f"{prefix}/api/v1/canvas")

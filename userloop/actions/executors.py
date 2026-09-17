@@ -118,6 +118,12 @@ async def execute_action(
         result = await ma.execute(ctx, action, loop, user)
         ctx.write_outbox({**record, **result})
         return result
+    if atype.startswith("touch."):
+        from userloop.touch import dispatch
+
+        result = await dispatch(ctx, action, loop, user, store=getattr(ctx, "store", None))
+        ctx.write_outbox({**record, **result})
+        return result
 
     try:
         if atype == "webhook" or atype == "generic":

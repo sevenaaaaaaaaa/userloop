@@ -29,7 +29,15 @@ def cfg_of(ctx: ExecutorContext) -> dict[str, Any]:
 
 
 def in_quiet_hours(cfg: dict, now: datetime | None = None) -> bool:
-    start, end = cfg["quiet_hours"]
+    """静默期判断：quiet_hours=[起,止)（本地时区，按 tz_offset_hours 从 UTC 换算）。
+
+    - `[]` 或 `[0, 0]` → 关闭静默期（测试/内部通知场景）
+    - 支持跨零点（如 [22, 8]）
+    """
+    qh = cfg.get("quiet_hours") or []
+    if len(qh) != 2 or int(qh[0]) == int(qh[1]):
+        return False
+    start, end = int(qh[0]), int(qh[1])
     hour = ((now or datetime.utcnow()) + timedelta(hours=int(cfg["tz_offset_hours"]))).hour
     if start <= end:
         return start <= hour < end

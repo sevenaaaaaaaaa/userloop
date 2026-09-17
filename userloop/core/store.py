@@ -124,6 +124,18 @@ CREATE TABLE IF NOT EXISTS canvas_waits (
 );
 CREATE INDEX IF NOT EXISTS idx_waits_due ON canvas_waits(status, resume_at);
 
+CREATE TABLE IF NOT EXISTS identities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(type, value)
+);
+CREATE INDEX IF NOT EXISTS idx_identities_user ON identities(user_id, type);
+
 CREATE TABLE IF NOT EXISTS ai_decisions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -242,6 +254,7 @@ class Store:
                 "props=?, last_seen=? WHERE id=?",
                 (email, name, j(merged_props), iso_now(), existing["id"]),
             )
+            await self._bind_email_identity(existing["id"], email or existing.get("email"))
             return await self.find_user(distinct_id)  # type: ignore[return-value]
         uid = new_id("u")
         await self.db.execute(
@@ -249,7 +262,22 @@ class Store:
             "VALUES (?,?,?,?,'visitor',?,'{}',?,?)",
             (uid, distinct_id, email, name, j(props or {}), iso_now(), iso_now()),
         )
+        await self._bind_email_identity(uid, email)
         return await self.find_user(distinct_id)  # type: ignore[return-value]
+
+    async def _bind_email_identity(self, user_id: str, email: str | None) -> None:
+        """邮箱自动进身份图谱（跨渠道找人，见 docs/TOUCHPOINTS.md）。"""
+        if not email:
+            return
+        cur = await self.db.execute("SELECT user_id FROM identities WHERE type='email' AND value=?", (email.strip().lower(),))
+        row = await cur.fetchone()
+        if row:
+            return
+        await self.db.execute(
+            "INSERT INTO identities (user_id, type, value, verified, source, created_at) "
+            "VALUES (?, 'email', ?, 0, 'cdp', ?) ON CONFLICT(type, value) DO NOTHING",
+            (user_id, email.strip().lower(), iso_now()),
+        )
 
     async def update_user(self, user_id: str, **fields: Any) -> None:
         assert self.db

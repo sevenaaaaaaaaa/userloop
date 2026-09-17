@@ -13,7 +13,8 @@ from userloop.ai import brain, guardrails
 from userloop.core.store import Store
 
 AI_CFG = {"ai": {"base_url": "https://api.deepseek.com/v1", "api_key": "sk-t", "model": "deepseek-chat",
-                 "brain": {"enabled": True, "auto_execute_medium": False, "min_gap_hours": 24}}}
+                 "brain": {"enabled": True, "auto_execute_medium": False, "min_gap_hours": 24,
+                            "quiet_hours": [0, 0]}}}
 
 
 def _llm(intent="send_email", topic="引导激活", brief="引导完成第一个项目", confidence=0.8):
@@ -102,7 +103,7 @@ def test_quiet_hours() -> None:
 
 
 async def test_daily_budget(store: Store, tmp_path) -> None:
-    ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t", "brain": {"enabled": True, "daily_budget": 1}}})
+    ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t", "brain": {"enabled": True, "daily_budget": 1, "quiet_hours": [0, 0]}}})
     user = await store.upsert_user("b5", email="b5@x.com")
     await store.update_user(user["id"], stage="activated")
     await brain.run_for_user(store, ctx, await store.get_user(user["id"]), transport=_llm("compose_email"))
