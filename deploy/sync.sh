@@ -66,7 +66,9 @@ LOGIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$SITE/userloo
 TRACK_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$SITE/userloop/track.js")
 MAIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$SITE/")
 MFLOW_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$SITE/mflow/")
-INGEST=$(ssh -p "$SSH_PORT" "root@$HOST" 'TOKEN=$(python3 -c "import json;print(json.load(open(\"/www/wwwroot/userloop/data/config.json\"))[\"api_token\"])"); curl -s -X POST http://127.0.0.1:8600/userloop/api/v1/ingest -H "X-UserLoop-Token: $TOKEN" -H "Content-Type: application/json" -d "{\"distinct_id\":\"sync_healthcheck\",\"event\":\"page_view\"}" -o /dev/null -w "%{http_code}"')
+INGEST=$(ssh -p "$SSH_PORT" "root@$HOST" '/www/wwwroot/userloop/.venv/bin/python -c "
+import json
+print(json.load(open(\"/www/wwwroot/userloop/data/config.json\", encoding=\"utf-8\"))[\"api_token\"])" > /tmp/ul_token && TOKEN=$(cat /tmp/ul_token) && curl -s -X POST http://127.0.0.1:8600/userloop/api/v1/ingest -H "X-UserLoop-Token: $TOKEN" -H "Content-Type: application/json" -d "{\"distinct_id\":\"sync_healthcheck\",\"event\":\"page_view\"}" -o /dev/null -w "%{http_code}"')
 echo "登录页:$LOGIN_CODE track.js:$TRACK_CODE ingest:$INGEST 主站:$MAIN_CODE mflow:$MFLOW_CODE"
 if [ "$LOGIN_CODE" != "200" ] || [ "$INGEST" != "200" ]; then
   echo "❌ 线上验收未通过，中止（服务器代码未回滚，请人工检查 journalctl -u userloop）"
