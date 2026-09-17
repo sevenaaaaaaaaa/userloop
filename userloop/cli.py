@@ -28,7 +28,7 @@ def _sync(cfg: dict) -> Any:
     async def _open() -> Any:
         from userloop.core.store import Store
 
-        store = Store(cfg["db_path"])
+        store = Store(cfg["db_path"], cfg)
         await store.connect()
         from userloop.core.templates import seed_templates
 
@@ -107,7 +107,7 @@ def brain(data_dir: str | None, distinct_id: str | None, limit: int, force: bool
         from userloop.core.templates import seed_templates
 
         cfg = load_config(data_dir)
-        store = Store(cfg["db_path"])
+        store = Store(cfg["db_path"], cfg)
         await store.connect()
         await seed_templates(store, cfg["data_dir"])
         ctx = ExecutorContext(cfg["data_dir"], cfg)
@@ -231,7 +231,7 @@ def stats(data_dir: str | None) -> None:
         from userloop.core.templates import seed_templates
 
         cfg = load_config(data_dir)
-        store = Store(cfg["db_path"])
+        store = Store(cfg["db_path"], cfg)
         await store.connect()
         await seed_templates(store, cfg["data_dir"])
         try:
@@ -281,7 +281,7 @@ def demo(data_dir: str | None, users: int) -> None:
         from userloop.core.store import Store
 
         cfg = load_config(data_dir)
-        store = Store(cfg["db_path"])
+        store = Store(cfg["db_path"], cfg)
         await store.connect()
         from userloop.core.templates import seed_templates
 

@@ -30,7 +30,7 @@ async def _with_store(fn: Any) -> Any:
     from userloop.core.store import Store
 
     cfg = _load_cfg()
-    store = Store(cfg["db_path"])
+    store = Store(cfg["db_path"], cfg)
     await store.connect()
     try:
         return await fn(store)

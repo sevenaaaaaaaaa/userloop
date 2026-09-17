@@ -38,7 +38,7 @@ def create_app(data_dir: str | None = None) -> Any:
                   "/api/v1/hub/ingest", "/api/login", "/api/logout", "/api/auth/me"}
 
     cfg = load_config(data_dir)
-    store = Store(cfg["db_path"])
+    store = Store(cfg["db_path"], cfg)
     ctx = ExecutorContext(cfg["data_dir"], cfg)
     sessions = Sessions()
     throttle = Throttle()

@@ -188,6 +188,13 @@ class Store:
         from userloop.core.eventstore import build_event_store
 
         self.events = await build_event_store(self.cfg, self.db)
+        import logging
+
+        if getattr(self.events, "reason", ""):
+            logging.getLogger("userloop").warning(
+                "events 后端降级为 %s：%s", self.events.backend, self.events.reason)
+        else:
+            logging.getLogger("userloop").info("events 后端：%s", self.events.backend)
         try:
             await self.db.execute("PRAGMA optimize")
         except aiosqlite.Error:
