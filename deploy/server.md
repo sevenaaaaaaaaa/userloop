@@ -46,6 +46,13 @@
   ```
 - 迁移记录：SQLite 1064 条 → MySQL 1121 条（含切换后新写入）
 
+## 触点通道（2026-09-17）
+
+- **邮件**：经 OpenFlow 桥 `userloop-bridge`（多通道 + 抑制名单 + 追踪/退订）；本地 SMTP 兜底
+- **H5/落地页**：经 **WebsFlow 后台** `https://nownexts.com/webflow/api`（服务账号 `userloop-bot@nownexts.com`，凭据 `data/websflow-bot.txt` 600）；公网页 `/webflow/p/<token>`
+- **短信**：`touch.sms.provider` ∈ aliyun|tencent|webhook，现值 `enabled=false`（填 AK/SK + 报备签名模板即生效）
+- **回执**：邮件 `email_open/email_click/email_unsubscribed`、H5 `h5_view/h5_click` → 事件总线 → 旅程/验证回流
+
 ## 本地日常
 
 ```bash
