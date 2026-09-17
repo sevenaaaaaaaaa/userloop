@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS ab_assignments (
 CREATE INDEX IF NOT EXISTS idx_ab_exp ON ab_assignments(experiment_id, variant, created_at);
 CREATE INDEX IF NOT EXISTS idx_ab_user ON ab_assignments(user_id, experiment_id);
 
+CREATE TABLE IF NOT EXISTS h5_campaigns (
+    campaign_key TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    share_token TEXT NOT NULL,
+    url TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS touch_pages (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -686,6 +694,23 @@ class Store:
             "SELECT DISTINCT user_id FROM ab_assignments WHERE experiment_id=? AND variant=?",
             (experiment_id, variant))
         return [r["user_id"] for r in await cur.fetchall()]
+
+    # ---- H5 campaign 页（一个 campaign 一条链接，供所有用户复用；千人千面按访客维度）----
+
+    async def get_campaign_page(self, key: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM h5_campaigns WHERE campaign_key=?", (key,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def put_campaign_page(self, key: str, project_id: str, share_token: str, url: str) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO h5_campaigns (campaign_key, project_id, share_token, url, updated_at) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(campaign_key) DO UPDATE SET project_id=excluded.project_id, "
+            "share_token=excluded.share_token, url=excluded.url, updated_at=excluded.updated_at",
+            (key, project_id, share_token, url, iso_now()),
+        )
 
     # ---- 触点页面（H5/落地页）----
 
