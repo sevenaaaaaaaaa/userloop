@@ -47,14 +47,17 @@ class EmailDriver:
                         env = resp.json()
                     except ValueError:
                         pass
-                    payload = env.get("data") if isinstance(env.get("data"), dict) else env
-                    if resp.status_code == 200 and env.get("ok"):
-                        return TouchResult(True, self.channel, ref=(payload or {}).get("ref"),
-                                           extra={"via": (payload or {}).get("channel", "openflow")})
-                    if (payload or {}).get("suppressed"):
-                        return TouchResult(False, self.channel,
-                                           note=f"收件人在抑制名单：{payload.get('message', '')}")
-                    note = env.get("error") or (payload or {}).get("message") or f"bridge HTTP {resp.status_code}"
+                    payload = env.get("data") if isinstance(env.get("data"), dict) else {}
+                    # 插件系统信封：外层 ok 恒为 true，业务结果在内层 data.ok（缺省视为成功）
+                    inner_ok = payload.get("ok", True)
+                    if resp.status_code == 200 and env.get("ok") and inner_ok:
+                        return TouchResult(True, self.channel, ref=payload.get("ref"),
+                                           extra={"via": payload.get("channel", "openflow")})
+                    if (payload or {}).get("suppressed") or inner_ok is False:
+                        reason = payload.get("message") or payload.get("error") or "bridge 拒绝发送"
+                        return TouchResult(False, self.channel, note=reason,
+                                           extra={"suppressed": bool(payload.get("suppressed"))})
+                    note = env.get("error") or f"bridge HTTP {resp.status_code}"
                 except Exception as exc:  # noqa: BLE001
                     note = f"bridge 不可用：{exc}"
             else:
