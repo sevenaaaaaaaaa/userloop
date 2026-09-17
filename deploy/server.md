@@ -29,6 +29,23 @@
 5. 追加 Apache 反代（幂等：已有 UserLoop 段则跳过）→ `apachectl configtest && systemctl reload httpd`
 6. 验证：`curl -s https://nownexts.com/userloop/` 应返回登录页；`/api/login` 错密码返回 403
 
+## 存储分层（2026-09-17，对齐 OpenFlow EventStore 演进）
+
+- **events 主用 MySQL**：独立实例 `userloop-mysql.service` → `127.0.0.1:3307`
+  - 数据目录 `/www/server/userloop-mysql/data`，配置 `/www/server/userloop-mysql/my.cnf`（低内存：buffer pool 64M、performance_schema OFF）
+  - 凭据：`/www/server/userloop-mysql/credentials.txt`（600，root + userloop 业务账号）
+  - 业务账号 `userloop@127.0.0.1` 仅授 userloop 库的 SELECT/INSERT/UPDATE/DELETE/CREATE/INDEX/ALTER
+  - **与主 MySQL(:3306) 完全隔离**，不动现有库与宝塔配置
+- **SQLite 兜底**：`/www/wwwroot/userloop/data/userloop.db`（users/loops/actions/canvas/feedback 等仍在 SQLite；events 作为兜底与备份保留）
+- **降级策略**：MySQL 连不上 → 自动回 SQLite 并记 warning，闭环不中断（已演练：停实例 → 服务仍 200 → 恢复后自动切回）
+- 运维命令：
+  ```bash
+  userloop db status          # 查看当前 events 后端与规模
+  userloop db migrate-events  # SQLite → MySQL 幂等回填（可重复执行）
+  systemctl status userloop-mysql   # 独立实例状态
+  ```
+- 迁移记录：SQLite 1064 条 → MySQL 1121 条（含切换后新写入）
+
 ## 本地日常
 
 ```bash
