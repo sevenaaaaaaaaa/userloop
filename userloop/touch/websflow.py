@@ -120,7 +120,10 @@ async def publish_project(cfg: dict, project_id: str, token: str, transport: Any
     async def _publish() -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=20, transport=transport) as client:
             r = await client.post(f"{base}/projects/{project_id}/publish", headers=headers)
-            d = r.json() if r.status_code == 200 else {}
+            try:
+                d = r.json()
+            except ValueError:
+                d = {}
             if d.get("token"):
                 return {"ok": True, "share_token": d["token"]}
             return {"ok": False, "error": d.get("error") or f"HTTP {r.status_code}", "quota": bool(d.get("quota"))}
@@ -146,7 +149,10 @@ async def create_project(cfg: dict, name: str, data: dict, description: str = ""
             r1 = await client.post(f"{base}/projects",
                                    json={"name": name, "mode": mode, "data": data, "description": description},
                                    headers=headers)
-            d1 = r1.json() if r1.status_code in (200, 201) else {}
+            try:
+                d1 = r1.json()
+            except ValueError:
+                d1 = {}
             pid = (d1.get("project") or {}).get("id")
             if not pid and d1.get("quota"):
                 # 项目额度不足 → 清理自有未发布项目后重试一次
@@ -154,7 +160,10 @@ async def create_project(cfg: dict, name: str, data: dict, description: str = ""
                 r2 = await client.post(f"{base}/projects",
                                        json={"name": name, "mode": mode, "data": data, "description": description},
                                        headers=headers)
-                d2 = r2.json() if r2.status_code in (200, 201) else {}
+                try:
+                    d2 = r2.json()
+                except ValueError:
+                    d2 = {}
                 pid = (d2.get("project") or {}).get("id")
                 if not pid:
                     return {"ok": False, "error": d2.get("error") or "建项目失败（清理后仍额度不足）",
