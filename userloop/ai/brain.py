@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from userloop.ai import guardrails as G
@@ -59,11 +60,14 @@ INTENTS: dict[str, dict[str, Any]] = {
 SYSTEM_PROMPT = """你是"全域全生命周期用户运营 AI"，为一个具体用户决定「下一步最佳动作」。
 
 硬性纪律（必须遵守）：
-1. 只在给定 intent 白名单里选；没有合适动作时必须选 noop（不打扰用户也是一种正确决策）。
-2. 尊重用户所处生命周期阶段：访客阶段不外发邮件；付费用户重留存与增值；流失风险用户重召回。
-3. 考虑历史效果：只参考历史数据中 effective 的正向经验，避免重复无效动作。
-4. 触达上限：单个用户 24 小时内不超过 1 次外发触达；宁少勿滥。
-5. 只输出 JSON，字段：intent, topic, brief, reasoning, confidence(0-1), urgency(low|medium|high), expected_effect。"""
+1. 只在给定 intent 白名单里选；没有任何可行动信号时才选 noop。
+2. 决策要果断：只要 context.signals 指出了明确缺口（如沉默期过长、阶段停滞、高价值未转化），
+   就应选择对应的触达/同步动作（如 send_email / signal_openflow / sync_crm），
+   不要因为"信息不够完美"就退回 noop —— noop 只用于真正无信号或无价值的情况。
+3. 尊重用户所处生命周期阶段：访客阶段不外发邮件；付费用户重留存与增值；流失风险用户重召回。
+4. 参考历史效果：优先复用 effect_stats 中 effective 的模板经验，避免重复无效动作。
+5. 触达上限：单用户 24h 内 ≤1 次外发触达（服务端另有强制频控，你无需重复计算）。
+6. 只输出 JSON，字段：intent, topic, brief, reasoning, confidence(0-1), urgency(low|medium|high), expected_effect。"""
 
 
 def stage_policy(stage: str) -> list[str]:
@@ -81,7 +85,7 @@ def stage_policy(stage: str) -> list[str]:
 
 
 async def build_context(store: Store, user: dict) -> dict[str, Any]:
-    """全生命周期上下文（供 LLM 决策）。"""
+    """全生命周期上下文 + 派生信号（让 LLM 基于结论而非原始时间戳决策）。"""
     uid = user["id"]
     events = await store.recent_events_for_user(uid, limit=6)
     transitions = await store.list_transitions(user_id=uid, limit=4)
@@ -89,16 +93,69 @@ async def build_context(store: Store, user: dict) -> dict[str, Any]:
     feedback = await store.feedback_stats()
     touches = await store.touches_since(uid, hours=24)
     stats = user.get("stats") if isinstance(user.get("stats"), dict) else pj(user.get("stats"), {}) or {}
+    stage = user.get("stage", "visitor")
+    signals = derive_signals(user, stats, events, touches)
     return {
-        "user": {"stage": user.get("stage"), "email": user.get("email") or None,
+        "user": {"stage": stage, "email": user.get("email") or None,
                  "stats": stats, "first_seen": user.get("first_seen"), "last_seen": user.get("last_seen")},
+        "signals": signals,
         "recent_events": [{"event": e["event"], "at": e["created_at"]} for e in events],
         "journey": [f"{t['from_stage']}→{t['to_stage']}" for t in reversed(transitions)],
         "recent_loops": [{"template": l["template_id"], "status": l["status"]} for l in loops],
         "touches_last_24h": touches,
         "effect_stats": {k: v for k, v in list(feedback.items())[:8]},
-        "allowed_intents": stage_policy(user.get("stage", "visitor")),
+        "allowed_intents": stage_policy(stage),
     }
+
+
+def _days_since(ts: str | None) -> float | None:
+    if not ts:
+        return None
+    try:
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+    return round((datetime.utcnow() - t).total_seconds() / 86400, 1)
+
+
+def derive_signals(user: dict, stats: dict, events: list[dict], touches: int) -> dict[str, Any]:
+    """把原始数据翻译成可行动信号（推荐意图 + 缺口说明），降低 LLM 推理负担。"""
+    stage = user.get("stage", "visitor")
+    silence = _days_since(user.get("last_seen")) or 0.0
+    age = _days_since(user.get("first_seen")) or 0.0
+    purchases = int(stats.get("purchases", 0))
+    rec: list[str] = []
+    gaps: list[str] = []
+    hint = None
+
+    if stage == "visitor":
+        gaps.append("尚未注册：只能内部提醒或生成草稿，不可外发")
+        rec, hint = ["notify_team", "compose_email"], "notify_team"
+    elif stage == "signup":
+        if age >= 1:
+            gaps.append(f"注册 {age} 天仍未激活")
+            rec, hint = ["send_email", "compose_email", "sync_crm"], "send_email"
+    elif stage in ("activated", "paying", "retained"):
+        if silence >= 7:
+            gaps.append(f"沉默 {silence} 天（此前已 {stage}）")
+            rec, hint = ["send_email", "sync_crm", "signal_openflow"], "send_email"
+        elif purchases == 0 and stage == "activated":
+            gaps.append("已激活但从未付费")
+            rec, hint = ["send_email", "signal_openflow"], "send_email"
+        elif purchases >= 2:
+            gaps.append(f"已复购 {purchases} 次：适合增值/推荐")
+            rec, hint = ["send_email", "push_content", "sync_crm"], "send_email"
+    elif stage in ("churn_risk", "churned"):
+        gaps.append("流失风险/已流失：优先召回")
+        rec, hint = ["send_email", "notify_team"], "send_email"
+
+    if touches:
+        gaps.append(f"24h 内已触达 {touches} 次：服务端会频控，倾向 noop")
+        hint = None if stage == "visitor" else hint
+
+    return {"silence_days": silence, "account_age_days": age, "purchases": purchases,
+            "gaps": gaps or ["无显著缺口"], "recommended_intents": rec or ["noop"],
+            "recommended": hint, "touched_24h": touches}
 
 
 async def decide(ctx: ExecutorContext, context: dict, transport: Any = None) -> dict[str, Any]:
