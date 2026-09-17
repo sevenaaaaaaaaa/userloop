@@ -90,6 +90,28 @@ async def unpublish_other_projects(cfg: dict, token: str, keep_id: str | None = 
     return freed
 
 
+async def delete_own_projects(cfg: dict, token: str, keep_id: str | None = None,
+                              only_unpublished: bool = True, transport: Any = None) -> int:
+    """额度不足时清理我们自己的旧项目（默认只删未发布的，保留已发布页）。"""
+    base = str(cfg.get("api_base") or "").rstrip("/")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    freed = 0
+    try:
+        async with httpx.AsyncClient(timeout=15, transport=transport) as client:
+            resp = await client.get(f"{base}/projects", headers=headers)
+            for p in (resp.json().get("projects") or []):
+                if p.get("id") == keep_id:
+                    continue
+                if only_unpublished and p.get("published"):
+                    continue
+                r = await client.delete(f"{base}/projects/{p['id']}", headers=headers)
+                if r.status_code in (200, 204):
+                    freed += 1
+    except Exception:  # noqa: BLE001
+        return freed
+    return freed
+
+
 async def publish_project(cfg: dict, project_id: str, token: str, transport: Any = None) -> dict[str, Any]:
     """发布项目；额度不足时自动下架我们的旧页后重试。"""
     base = str(cfg.get("api_base") or "").rstrip("/")
@@ -126,6 +148,17 @@ async def create_project(cfg: dict, name: str, data: dict, description: str = ""
                                    headers=headers)
             d1 = r1.json() if r1.status_code in (200, 201) else {}
             pid = (d1.get("project") or {}).get("id")
+            if not pid and d1.get("quota"):
+                # 项目额度不足 → 清理自有未发布项目后重试一次
+                await delete_own_projects(cfg, token, only_unpublished=True, transport=transport)
+                r2 = await client.post(f"{base}/projects",
+                                       json={"name": name, "mode": mode, "data": data, "description": description},
+                                       headers=headers)
+                d2 = r2.json() if r2.status_code in (200, 201) else {}
+                pid = (d2.get("project") or {}).get("id")
+                if not pid:
+                    return {"ok": False, "error": d2.get("error") or "建项目失败（清理后仍额度不足）",
+                            "quota": True}
             if not pid:
                 return {"ok": False, "error": d1.get("error") or f"建项目失败 HTTP {r1.status_code}",
                         "quota": bool(d1.get("quota"))}
