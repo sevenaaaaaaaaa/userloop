@@ -114,3 +114,39 @@ async def test_email_open_click_unsubscribe_endpoints(tmp_path) -> None:
         events = client.get("/api/v1/events?limit=20").json()["events"]
         names = {e["event"] for e in events}
         assert {"email_open", "email_click", "email_unsubscribed"} <= names
+
+
+async def test_email_bridge_suppressed_envelope(tmp_path, monkeypatch) -> None:
+    """插件系统信封 {ok:true,data:{ok:false,suppressed:true}} 必须判为失败且不降级外发。"""
+    import httpx
+
+    sent = {"fallback": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "data": {
+            "ok": False, "message": "收件人在抑制名单（退订/退信/投诉）", "suppressed": True}})
+
+    import userloop.actions.executors as ex
+
+    def fake_send(ctx, to, subject, text):
+        sent["fallback"] += 1
+        return {"ok": True, "to": to}
+
+    monkeypatch.setattr(ex, "send_email", fake_send)
+    ctx = ex.ExecutorContext(str(tmp_path), {
+        "touch": {"email": {"driver": "openflow", "bridge_url": "http://bridge.test", "bridge_token": "t"}},
+        "api_token": "x"})
+    import userloop.touch.drivers as drv
+    orig_client = httpx.AsyncClient
+
+    class Patched(httpx.AsyncClient):
+        def __init__(self, *a, **kw):
+            kw["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **kw)
+
+    monkeypatch.setattr(drv.httpx, "AsyncClient", Patched)
+    res = await ex.execute_action(ctx, {"type": "touch.email", "payload": {"subject": "s", "text": "b"}},
+                                  {"id": "l", "template_id": "t"}, {"id": "u", "email": "sup@x.com"})
+    assert res["ok"] is False and res["suppressed"] is True
+    assert sent["fallback"] == 0, "抑制名单命中时绝不能降级外发"
+    assert orig_client is not None
