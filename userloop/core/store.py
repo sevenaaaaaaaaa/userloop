@@ -124,6 +124,22 @@ CREATE TABLE IF NOT EXISTS canvas_waits (
 );
 CREATE INDEX IF NOT EXISTS idx_waits_due ON canvas_waits(status, resume_at);
 
+CREATE TABLE IF NOT EXISTS touch_pages (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    loop_id TEXT,
+    template_id TEXT,
+    goal_event TEXT,
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    cta_text TEXT NOT NULL DEFAULT '',
+    cta_url TEXT NOT NULL DEFAULT '',
+    views INTEGER NOT NULL DEFAULT 0,
+    clicks INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pages_user ON touch_pages(user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS identities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
@@ -604,6 +620,30 @@ class Store:
             scored.append((touched, u.get("last_seen") or "", u))
         scored.sort(key=lambda x: (x[0], x[1]), reverse=False)
         return [u for _, _, u in scored[:limit]]
+
+    # ---- 触点页面（H5/落地页）----
+
+    async def insert_touch_page(self, page: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO touch_pages (id, user_id, loop_id, template_id, goal_event, title, body, "
+            "cta_text, cta_url, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (page["id"], page["user_id"], page.get("loop_id"), page.get("template_id"),
+             page.get("goal_event"), page.get("title", ""), page.get("body", ""),
+             page.get("cta_text", ""), page.get("cta_url", ""), iso_now()),
+        )
+
+    async def get_touch_page(self, page_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM touch_pages WHERE id=?", (page_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def bump_touch_page(self, page_id: str, field: str) -> None:
+        if field not in ("views", "clicks"):
+            return
+        assert self.db
+        await self.db.execute(f"UPDATE touch_pages SET {field}={field}+1 WHERE id=?", (page_id,))
 
     # ---- feedback ----
     async def insert_feedback(self, f: dict) -> None:

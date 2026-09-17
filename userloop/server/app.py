@@ -26,6 +26,7 @@ from userloop.core.scheduler import (
 )
 from userloop.core.store import Store, iso_now, pj
 from userloop.core.throttle import Throttle
+from userloop.touch.base import TouchSpec
 from userloop.server.auth import COOKIE_NAME, Sessions, auth_enabled, sid_from_cookie, verify_user
 
 
@@ -406,6 +407,66 @@ def create_app(data_dir: str | None = None) -> Any:
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>退订</title></head>
 <body style="font-family:-apple-system,'PingFang SC',sans-serif;padding:60px 20px;text-align:center;color:#1f2937">
 <h2 style="font-size:18px">邮件退订</h2><p style="color:#6b7280">{body}</p></body></html>""")
+
+    # ---- H5 触点页（自持动态页：打开/点击追踪回流入旅程）----
+
+    @app.get(f"{prefix}/t/p/{{page_id}}", response_class=HTMLResponse)
+    async def touch_page(page_id: str, request: Request) -> HTMLResponse:
+        from userloop.touch.base import read_token
+        from userloop.touch.render import render_h5
+
+        page = await store.get_touch_page(page_id)
+        if not page:
+            return HTMLResponse("<h1 style='font-family:sans-serif;padding:40px'>页面不存在或已下线</h1>",
+                                status_code=404)
+        secret = str((cfg.get("touch") or {}).get("track_secret") or cfg.get("api_token") or "userloop")
+        data = read_token(secret, request.query_params.get("t", ""))
+        user = await store.get_user(page["user_id"])
+        if data and user:
+            try:
+                await handle(store, ctx, {"distinct_id": user["distinct_id"], "event": "h5_view",
+                                          "props": {"page_id": page_id, "loop_id": page.get("loop_id") or "",
+                                                    "template_id": page.get("template_id") or "", "channel": "h5"},
+                                          "source": "touch",
+                                          "event_id": f"h5_view:{page_id}:{data.get('u')}"})
+            except ValueError:
+                pass
+            await store.bump_touch_page(page_id, "views")
+        spec = TouchSpec(channel="h5", title=page["title"], body=page["body"],
+                         cta_text=page["cta_text"], cta_url="", loop_id=page.get("loop_id"),
+                         template_id=page.get("template_id"))
+        if page["cta_text"]:
+            spec.cta_url = f"{prefix}/t/p/{page_id}/go?t={request.query_params.get('t', '')}"
+        page_html = render_h5(spec, cfg)["html"]
+        return HTMLResponse(page_html, headers={"Cache-Control": "no-store"})
+
+    @app.get(f"{prefix}/t/p/{{page_id}}/go")
+    async def touch_page_go(page_id: str, request: Request) -> Any:
+        from fastapi.responses import RedirectResponse
+
+        from userloop.touch.base import read_token
+
+        page = await store.get_touch_page(page_id)
+        if not page:
+            raise HTTPException(status_code=404, detail="page not found")
+        secret = str((cfg.get("touch") or {}).get("track_secret") or cfg.get("api_token") or "userloop")
+        data = read_token(secret, request.query_params.get("t", ""))
+        user = await store.get_user(page["user_id"])
+        if data and user:
+            try:
+                await handle(store, ctx, {"distinct_id": user["distinct_id"], "event": "h5_click",
+                                          "props": {"page_id": page_id, "loop_id": page.get("loop_id") or "",
+                                                    "template_id": page.get("template_id") or "",
+                                                    "url": page["cta_url"][:500], "channel": "h5"},
+                                          "source": "touch",
+                                          "event_id": f"h5_click:{page_id}:{data.get('u')}"})
+            except ValueError:
+                pass
+            await store.bump_touch_page(page_id, "clicks")
+        target = page["cta_url"] or "/"
+        if not str(target).lower().startswith(("http://", "https://")):
+            target = "/"
+        return RedirectResponse(target, status_code=302)
 
     # ---- Canvas 编排 API ----
 

@@ -92,38 +92,38 @@ class ImDriver:
 
 
 class H5Driver:
-    """H5/落地页：P0 用内置极简模板；P1 接 WebsFlow 生成投放页。"""
+    """H5/落地页触点：自持动态页（零外部依赖，天然可追踪）。
+
+    - 生成页面记录 → 返回公开链接 /t/p/<id>?t=<签名>
+    - 打开记 h5_view、CTA 点击记 h5_click 并 302 到目标
+    - WebsFlow 富页面构建器（模块化/千人千面）留 P2
+    """
 
     channel = "h5"
     caps = {"render", "deliver", "track"}
 
     async def deliver(self, spec: Any, user: dict, ctx: Any) -> TouchResult:
-        h5_cfg = ((ctx.config.get("touch") or {}).get("h5") or {})
-        base = str(h5_cfg.get("base_url") or "").rstrip("/")
-        if base:
-            try:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.post(f"{base}/api/plugin/userloop-bridge/page",
-                                             json={"title": spec.title, "body": spec.body,
-                                                   "cta_text": spec.cta_text, "cta_url": spec.cta_url},
-                                             headers={"X-UserLoop-Bridge": str(h5_cfg.get("bridge_token") or "")})
-                data = resp.json() if resp.status_code == 200 else {}
-                if data.get("ok") and data.get("url"):
-                    return TouchResult(True, self.channel, ref=data["url"])
-                note = data.get("message") or f"WebsFlow HTTP {resp.status_code}"
-            except Exception as exc:  # noqa: BLE001
-                note = f"WebsFlow 不可用：{exc}"
-        else:
-            note = "未配置 WebsFlow，使用内置极简 H5"
-        page = render_h5(spec, ctx.config)
-        out_dir = (ctx.config.get("data_dir") or ".") + "/h5"
-        import os
+        from userloop.core.store import new_id
 
-        os.makedirs(out_dir, exist_ok=True)
-        name = f"{(spec.loop_id or 'page').replace('/', '_')}.html"
-        with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
-            f.write(page["html"])
-        return TouchResult(True, self.channel, degraded=True, ref=f"h5:{name}", note=note)
+        store = getattr(ctx, "store", None)
+        touch_cfg = ctx.config.get("touch") or {}
+        base = str((touch_cfg.get("h5") or {}).get("public_base")
+                   or touch_cfg.get("public_base") or "https://nownexts.com/userloop").rstrip("/")
+        page_id = new_id("pg")
+        if store is not None:
+            await store.insert_touch_page({
+                "id": page_id, "user_id": user["id"], "loop_id": spec.loop_id,
+                "template_id": spec.template_id, "goal_event": spec.goal_event,
+                "title": spec.title, "body": spec.body,
+                "cta_text": spec.cta_text, "cta_url": spec.cta_url,
+            })
+        secret = str(touch_cfg.get("track_secret") or ctx.config.get("api_token") or "userloop")
+        from userloop.touch.base import make_token
+
+        token = make_token(secret, user["id"], spec.loop_id,
+                           {"t": spec.template_id or "", "c": "h5", "g": spec.goal_event or "", "p": page_id})
+        url = f"{base}/t/p/{page_id}?t={token}"
+        return TouchResult(True, self.channel, ref=url, extra={"url": url, "page_id": page_id})
 
 
 class WechatMpDriver:
@@ -178,20 +178,40 @@ class WecomDriver:
 
 
 class SmsDriver:
-    """短信：P1 接阿里云/腾讯云直连；P0 返回明确的未配置提示（不静默失败）。"""
+    """短信触点：阿里云/腾讯云/通用网关直连（OpenFlow 无发送实现，见规划文档）。"""
 
     channel = "sms"
     caps = {"deliver"}
 
     async def deliver(self, spec: Any, user: dict, ctx: Any) -> TouchResult:
-        ids = await of_user(ctx.store, user["id"]) if hasattr(ctx, "store") else {}
-        phone = ids.get("phone")
+        ids = await of_user(ctx.store, user["id"]) if hasattr(ctx, "store") and ctx.store else {}
+        phone = ids.get("phone") or (spec.vars or {}).get("phone")
         if not phone:
-            return TouchResult(False, self.channel, note="无手机号")
-        sms_cfg = ((ctx.config.get("touch") or {}).get("sms") or {})
-        if not sms_cfg.get("enabled"):
-            return TouchResult(False, self.channel, note="短信通道未启用（P1：阿里云/腾讯云直连）")
-        return TouchResult(False, self.channel, note="短信驱动待实现（P1）")
+            return TouchResult(False, self.channel, note="无手机号（需先绑定 phone 身份）")
+
+        # 合规：短信必须带退订指令；已退订用户永久不再发
+        sms_cfg = dict((ctx.config.get("touch") or {}).get("sms") or {})
+        props = user.get("props")
+        if isinstance(props, str):
+            import json as _json
+
+            try:
+                props = _json.loads(props or "{}")
+            except ValueError:
+                props = {}
+        props = props if isinstance(props, dict) else {}
+        if props.get("sms_unsubscribed") or props.get("unsubscribed_sms"):
+            return TouchResult(False, self.channel, note="用户已退订短信（sms_unsubscribed）")
+        if sms_cfg.get("append_unsubscribe", True) and "退订" not in spec.body:
+            spec.body = f"{spec.body}（回T退订）" if spec.body else "回T退订"
+
+        from userloop.touch import sms_providers
+
+        res = await sms_providers.send(sms_cfg, str(phone), spec.body,
+                                       transport=(spec.vars or {}).get("_transport"))
+        return TouchResult(bool(res.get("ok")), self.channel, ref=res.get("ref"),
+                           note=res.get("error") or "",
+                           extra={"provider": sms_cfg.get("provider"), "phone_tail": str(phone)[-4:]})
 
 
 def register_all() -> None:
