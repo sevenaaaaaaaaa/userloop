@@ -92,11 +92,11 @@ class ImDriver:
 
 
 class H5Driver:
-    """H5/落地页触点：自持动态页（零外部依赖，天然可追踪）。
+    """H5/落地页触点：优先用 **WebsFlow 后台**生成（SSR 托管页），未配置时降级内置页。
 
-    - 生成页面记录 → 返回公开链接 /t/p/<id>?t=<签名>
-    - 打开记 h5_view、CTA 点击记 h5_click 并 302 到目标
-    - WebsFlow 富页面构建器（模块化/千人千面）留 P2
+    - WebsFlow 模式：建项目 → 发布 → 返回其公网链接 /webflow/p/<token>
+      CTA 走 UserLoop 追踪跳转（/t/p/<id>/go），WebsFlow 侧用 goalId 记转化
+    - 内置模式（零依赖兜底）：/t/p/<id>?t=<签名> 动态渲染
     """
 
     channel = "h5"
@@ -104,12 +104,18 @@ class H5Driver:
 
     async def deliver(self, spec: Any, user: dict, ctx: Any) -> TouchResult:
         from userloop.core.store import new_id
+        from userloop.touch.base import make_token
 
         store = getattr(ctx, "store", None)
         touch_cfg = ctx.config.get("touch") or {}
-        base = str((touch_cfg.get("h5") or {}).get("public_base")
-                   or touch_cfg.get("public_base") or "https://nownexts.com/userloop").rstrip("/")
+        h5_cfg = dict(touch_cfg.get("h5") or {})
+        ul_base = str(touch_cfg.get("public_base") or "https://nownexts.com/userloop").rstrip("/")
+        secret = str(touch_cfg.get("track_secret") or ctx.config.get("api_token") or "userloop")
+
         page_id = new_id("pg")
+        token = make_token(secret, user["id"], spec.loop_id,
+                           {"t": spec.template_id or "", "c": "h5", "g": spec.goal_event or "", "p": page_id})
+        click_url = f"{ul_base}/t/p/{page_id}/go?t={token}"
         if store is not None:
             await store.insert_touch_page({
                 "id": page_id, "user_id": user["id"], "loop_id": spec.loop_id,
@@ -117,13 +123,31 @@ class H5Driver:
                 "title": spec.title, "body": spec.body,
                 "cta_text": spec.cta_text, "cta_url": spec.cta_url,
             })
-        secret = str(touch_cfg.get("track_secret") or ctx.config.get("api_token") or "userloop")
-        from userloop.touch.base import make_token
 
-        token = make_token(secret, user["id"], spec.loop_id,
-                           {"t": spec.template_id or "", "c": "h5", "g": spec.goal_event or "", "p": page_id})
-        url = f"{base}/t/p/{page_id}?t={token}"
-        return TouchResult(True, self.channel, ref=url, extra={"url": url, "page_id": page_id})
+        # 1) 首选：WebsFlow 后台生成托管页
+        if str(h5_cfg.get("provider") or "") == "websflow" and h5_cfg.get("api_base"):
+            from userloop.touch import websflow
+
+            data = websflow.build_page_data(
+                spec_title=spec.title, spec_body=spec.body, cta_text=spec.cta_text,
+                cta_link=click_url, goal_id=f"ul-{spec.loop_id or page_id}",
+                brand=str(touch_cfg.get("brand") or ""), mode=str(h5_cfg.get("project_mode") or "h5"))
+            res = await websflow.create_and_publish(
+                h5_cfg, name=f"UserLoop · {spec.title or page_id}"[:60], data=data,
+                description=f"UserLoop 旅程触点 loop={spec.loop_id} user={user['id']}",
+                transport=(spec.vars or {}).get("_transport"))
+            if res.get("ok"):
+                return TouchResult(True, self.channel, ref=res["url"],
+                                   extra={"url": res["url"], "page_id": page_id,
+                                          "provider": "websflow", "project_id": res.get("project_id")})
+            note = res.get("error") or "WebsFlow 生成失败"
+        else:
+            note = "未配置 WebsFlow（h5.provider=websflow），使用内置页"
+
+        # 2) 兜底：内置动态页
+        url = f"{ul_base}/t/p/{page_id}?t={token}"
+        return TouchResult(True, self.channel, degraded=True, ref=url,
+                           note=note, extra={"url": url, "page_id": page_id, "provider": "builtin"})
 
 
 class WechatMpDriver:
