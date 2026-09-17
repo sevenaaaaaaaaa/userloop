@@ -149,6 +149,27 @@ nodes/edges 图执行（对齐 OpenFlow CanvasSystem），控制台 `▦ 画布�
 
 节点类型：`trigger`（event / stage 触发）、`condition`（点路径求值 user./stats./props.，true/false 分支）、`action`（复用全部动作执行器含适配器）、`delay`（写等待队列，调度器到点恢复）、`exit`。执行留痕于 `canvas_runs.trace`。
 
+## A/B 版式实验（P2）
+
+版式与文案的 A/B 用现有验证回流判定有效性，不需要额外指标体系：
+
+```json
+{
+  "id": "email_cta_urgency", "channel": "email",
+  "match_templates": ["signup_no_activate"], "enabled": true,
+  "variants": [
+    {"id": "A", "weight": 50, "name": "温和版", "overrides": {"cta_text": "了解详情"}},
+    {"id": "B", "weight": 50, "name": "紧迫版", "overrides": {"cta_text": "立即完成（限今天）"}}
+  ],
+  "goal_event": "activation", "metric": "click_rate",
+  "min_samples": 20, "confidence": 0.9, "window_days": 14
+}
+```
+
+- 稳定分桶（同用户恒定版式）→ 变体只覆盖内容槽位 → 打开/点击/转化按变体归因
+- 双比例 z 检验判 `winner`；`promote` 后只发 winner 并写 feedback
+- 控制台「A/B 实验」面板查看指标/置信度/一键提升；`data/experiments.json` 可覆盖扩展
+
 ## 与家族系统的关系
 
 - **OpenFlow**：`openflow.*` 适配器把旅程信号推入其 InboundReceiver（落 CDP/线索）→ 被 GrowthBrain/画布/Agent 消费
