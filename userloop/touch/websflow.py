@@ -45,27 +45,31 @@ async def login(cfg: dict, transport: Any = None, force: bool = False) -> str | 
 
 
 def build_page_data(spec_title: str, spec_body: str, cta_text: str, cta_link: str,
-                    goal_id: str = "", brand: str = "", mode: str = "h5") -> dict:
-    """按 WebsFlow 区块契约拼装页面（内容槽位 → 区块 props）。"""
+                    goal_id: str = "", brand: str = "", mode: str = "h5",
+                    stage: str = "visitor", urg: bool = False) -> dict:
+    """按 WebsFlow 区块契约拼装**千人千面**页面（内容槽位 → 区块 props）。
+
+    - 设备：移动/桌面双版主视觉（SSR audience 互斥显示）
+    - 来源/UTM/回访/登录/阶段：personalize 运行时补丁（只改文案，不重复区块）
+    - 互动时长：紧迫阶段追加 countdown 区块（内置页另有 N 秒切换 CTA 的脚本）
+    """
+    from userloop.touch import personalize as pz
+
     paragraphs = [p.strip() for p in (spec_body or "").split("\n") if p.strip()]
-    blocks: list[dict[str, Any]] = [
-        {"id": "b_hero", "type": "hero", "variant": "center",
-         "props": {"badge": "", "title": spec_title or "专为你准备",
-                   "subtitle": paragraphs[0] if paragraphs else "",
-                   "btnText": cta_text or "立即查看", "btnLink": cta_link or "#",
-                   "bgType": "gradient", "gradient": "indigo", "align": "center"}},
-    ]
+    title = spec_title or "专为你准备"
+    subtitle = paragraphs[0] if paragraphs else ""
+    blocks: list[dict[str, Any]] = pz.hero_pair(title, subtitle, cta_text or "立即查看", cta_link or "#", stage)
     if len(paragraphs) > 1:
         blocks.append({"id": "b_text", "type": "text",
+                       "personalize": pz.personalize_rules(stage),
                        "props": {"title": "", "body": "\n".join(paragraphs[1:]), "align": "center"}})
-    blocks.append({"id": "b_cta", "type": "cta", "variant": "panel",
-                   "props": {"title": spec_title or "现在就开始", "subtitle": "",
-                             "btnText": cta_text or "立即查看", "btnLink": cta_link or "#",
-                             "style": "gradient", "goalId": goal_id}})
+    blocks.append(pz.cta_block(title, cta_text or "立即查看", cta_link or "#", goal_id, stage))
+    if urg:
+        blocks.append(pz.countdown_block(minutes=30, title="权益领取倒计时"))
     if brand:
         blocks.append({"id": "b_footer", "type": "footer",
                        "props": {"brand": brand, "desc": "", "links": [], "copyright": f"© {brand}"}})
-    return {"pages": [{"id": "main", "name": "首页", "slug": "", "blocks": blocks}]}
+    return {"segments": pz.segments(), "pages": [{"id": "main", "name": "首页", "slug": "", "blocks": blocks}]}
 
 
 async def create_and_publish(cfg: dict, name: str, data: dict, description: str = "",

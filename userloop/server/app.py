@@ -445,13 +445,21 @@ def create_app(data_dir: str | None = None) -> Any:
             except ValueError:
                 pass
             await store.bump_touch_page(page_id, "views")
+        from userloop.touch import personalize as pz
+
         spec = TouchSpec(channel="h5", title=page["title"], body=page["body"],
                          cta_text=page["cta_text"], cta_url="", loop_id=page.get("loop_id"),
                          template_id=page.get("template_id"))
         if page["cta_text"]:
             spec.cta_url = f"{prefix}/t/p/{page_id}/go?t={request.query_params.get('t', '')}"
-        page_html = render_h5(spec, cfg)["html"]
-        return HTMLResponse(page_html, headers={"Cache-Control": "no-store"})
+        # 千人千面：设备/UTM/来源/Cookie/阶段 → 内容与互动时长策略
+        content = pz.builtin_content(request, (user or {}).get("stage", "visitor"), cfg,
+                                     {"title": page["title"], "body": page["body"],
+                                      "subtitle": "", "cta_text": page["cta_text"]})
+        page_html = render_h5(spec, cfg, content)["html"]
+        resp = HTMLResponse(page_html, headers={"Cache-Control": "no-store"})
+        resp.set_cookie("ul_seen", "1", max_age=90 * 86400, samesite="lax", httponly=True)
+        return resp
 
     @app.get(f"{prefix}/t/p/{{page_id}}/go")
     async def touch_page_go(page_id: str, request: Request) -> Any:

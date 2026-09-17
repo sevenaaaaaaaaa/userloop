@@ -128,10 +128,13 @@ class H5Driver:
         if str(h5_cfg.get("provider") or "") == "websflow" and h5_cfg.get("api_base"):
             from userloop.touch import websflow
 
+            stage = str(user.get("stage") or "visitor")
+            urg = stage in ("paying", "churn_risk", "churned")
             data = websflow.build_page_data(
                 spec_title=spec.title, spec_body=spec.body, cta_text=spec.cta_text,
                 cta_link=click_url, goal_id=f"ul-{spec.loop_id or page_id}",
-                brand=str(touch_cfg.get("brand") or ""), mode=str(h5_cfg.get("project_mode") or "h5"))
+                brand=str(touch_cfg.get("brand") or ""), mode=str(h5_cfg.get("project_mode") or "h5"),
+                stage=stage, urg=urg)
             res = await websflow.create_and_publish(
                 h5_cfg, name=f"UserLoop · {spec.title or page_id}"[:60], data=data,
                 description=f"UserLoop 旅程触点 loop={spec.loop_id} user={user['id']}",

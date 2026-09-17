@@ -273,3 +273,95 @@ async def test_h5_driver_uses_websflow(tmp_path, monkeypatch) -> None:
         assert res.get("degraded") in (False, None)
     finally:
         await store.close()
+
+
+# ── 千人千面：来源/UTM/设备/Cookie/阶段/互动时长 ──
+
+def test_personalize_segments_and_rules() -> None:
+    from userloop.touch import personalize as pz
+
+    segs = pz.segments()
+    ids = {s["id"] for s in segs}
+    assert {"seg_utm_wechat", "seg_utm_ads", "seg_utm_edm", "seg_return", "seg_login"} <= ids
+    assert "seg_stage_paying" in ids
+    assert next(s for s in segs if s["id"] == "seg_utm_wechat")["rules"] == {"utm": "utm_source=wechat"}
+    rules = pz.personalize_rules("paying")
+    assert any(r["segmentId"] == "seg_utm_wechat" and r["patch"]["badge"] == "微信专享" for r in rules)
+
+
+def test_websflow_page_is_personalized() -> None:
+    from userloop.touch import websflow
+
+    data = websflow.build_page_data("权益到账", "第一段\n第二段", "领取", "https://x/go",
+                                    goal_id="g1", brand="芭乐派", stage="paying", urg=True)
+    blocks = {b["id"]: b for b in data["pages"][0]["blocks"]}
+    # 设备双版（SSR 互斥）
+    assert blocks["b_hero_desktop"]["audience"]["device"] == "desktop"
+    assert blocks["b_hero_mobile"]["audience"]["device"] == "mobile"
+    # 运行时补丁：来源/回访/登录
+    pz_ids = [r["segmentId"] for r in blocks["b_hero_desktop"]["personalize"]]
+    assert "seg_utm_wechat" in pz_ids and "seg_return" in pz_ids
+    # 紧迫阶段有倒计时区块
+    assert "b_countdown" in blocks and blocks["b_countdown"]["type"] == "countdown"
+    # 项目级人群段随页面下发
+    assert any(s["id"] == "seg_utm_wechat" for s in data["segments"])
+
+
+class _FakeReq:
+    def __init__(self, ua="", query=None, cookie=""):
+        self.headers = {"user-agent": ua, "cookie": cookie}
+        self.query_params = query or {}
+
+
+def test_builtin_content_dimensions() -> None:
+    from userloop.touch import personalize as pz
+
+    cfg = {"touch": {"personalize": {"dwell_seconds": 15, "dwell_cta_text": "现在立即领取"}}}
+    base = {"title": "T", "body": "B", "subtitle": "S"}
+
+    mob = pz.builtin_content(_FakeReq(ua="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"), "activated", cfg, base)
+    desk = pz.builtin_content(_FakeReq(ua="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"), "activated", cfg, base)
+    assert mob["device"] == "mobile" and desk["device"] == "desktop"
+    assert mob["cta_style"] == "block" and desk["cta_style"] == "inline"
+    assert mob["dwell"]["seconds"] == 15 and mob["dwell"]["alt_cta_text"] == "现在立即领取"
+
+    wechat = pz.builtin_content(_FakeReq(query={"utm_source": "wechat"}), "activated", cfg, base)
+    assert wechat["badge"] == "微信专享"
+    ads = pz.builtin_content(_FakeReq(query={"utm_medium": "cpc"}), "activated", cfg, base)
+    assert ads["badge"] == "限时活动"
+    email = pz.builtin_content(_FakeReq(query={"utm_medium": "email"}), "activated", cfg, base)
+    assert email["badge"] == "邮件专享"
+    back = pz.builtin_content(_FakeReq(cookie="ul_seen=1; a=b"), "activated", cfg, base)
+    assert back["badge"] == "欢迎回来"
+    stage = pz.builtin_content(_FakeReq(query={"utm_content": "stage-paying"}), "activated", cfg, base)
+    assert stage["badge"] == "为你准备"
+
+
+def test_builtin_page_renders_dwell_script(tmp_path) -> None:
+    import sqlite3
+
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        client.post("/api/v1/ingest", json={"distinct_id": "pz1", "email": "pz1@x.com", "event": "signup"})
+        uid = client.get("/api/v1/users").json()["users"][0]["id"]
+        conn = sqlite3.connect(str(tmp_path / "userloop.db"))
+        conn.execute("INSERT INTO touch_pages (id,user_id,loop_id,template_id,goal_event,title,body,cta_text,"
+                     "cta_url,views,clicks,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,0,?)",
+                     ("pg_pz", uid, "loop_pz", "tpl", "activation", "专属权益", "正文", "领取",
+                      "https://nownexts.com/pricing", "2026-09-18T00:00:00Z"))
+        conn.commit()
+        conn.close()
+        tok = make_token("userloop", uid, "loop_pz", {"t": "tpl", "c": "h5", "p": "pg_pz"})
+
+        # 移动端 + 微信来源
+        r = client.get(f"/t/p/pg_pz?t={tok}&utm_source=wechat",
+                       headers={"user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
+        assert "微信专享" in r.text and "setTimeout" in r.text and "ul-dwell-note" in r.text
+        assert "ul_seen=1" in r.headers.get("set-cookie", "") or "ul_seen" in str(r.headers)
+
+        # 桌面端 + 回访 cookie
+        r2 = client.get(f"/t/p/pg_pz?t={tok}", headers={"user-agent": "Mozilla/5.0 (Macintosh)",
+                                                        "cookie": "ul_seen=1"})
+        assert "欢迎回来" in r2.text

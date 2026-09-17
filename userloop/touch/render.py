@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import html
+import json
 from typing import Any
 
 from userloop.touch.base import TouchSpec, make_token
@@ -86,19 +87,61 @@ def render_im(spec: TouchSpec) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def render_h5(spec: TouchSpec, cfg: dict) -> dict[str, str]:
-    """极简 H5 页（P0 兜底；P1 交给 WebsFlow 生成投放页）。"""
-    title = html.escape(spec.title or "详情")
-    body = _paragraphs(spec.body)
-    cta = (f'<a href="{html.escape(spec.cta_url)}" style="display:inline-block;background:#2563eb;color:#fff;'
-           f'text-decoration:none;padding:12px 26px;border-radius:10px;font-weight:600;">{html.escape(spec.cta_text)}</a>'
-           if spec.cta_url else "")
-    page = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title></head>
-<body style="margin:0;font-family:-apple-system,'PingFang SC',sans-serif;background:#fafafa;color:#1f2937;">
-<div style="max-width:640px;margin:0 auto;padding:28px 20px 48px;">
-  <h1 style="font-size:22px;line-height:1.4;">{title}</h1>
-  <div style="font-size:16px;line-height:1.9;color:#374151;">{body}</div>
-  <div style="margin-top:24px;">{cta}</div>
-</div></body></html>"""
-    return {"title": spec.title, "html": page}
+def render_h5(spec: TouchSpec, cfg: dict, content: dict[str, Any] | None = None) -> dict[str, str]:
+    """内置 H5 页：支持千人千面（设备/UTM/来源/Cookie/阶段）+ 互动时长切换 CTA。
+
+    content 由 userloop.touch.personalize.builtin_content() 产出（服务端已判定维度）。
+    """
+    c = content or {}
+    title = html.escape(c.get("title") or spec.title or "详情")
+    body = _paragraphs(c.get("body") or spec.body)
+    badge = c.get("badge") or ""
+    subtitle = c.get("subtitle") or ""
+    cta_text = html.escape(spec.cta_text or "查看详情")
+    cta_url = html.escape(spec.cta_url or "#")
+    device = c.get("device") or "desktop"
+    dwell = c.get("dwell") or {}
+    secs = int(dwell.get("seconds") or 0)
+    alt_text = html.escape(dwell.get("alt_cta_text") or "")
+    alt_note = html.escape(dwell.get("alt_note") or "")
+
+    badge_html = (f'<div style="display:inline-block;padding:4px 12px;border-radius:999px;background:#eef2ff;'
+                  f'color:#4338ca;font-size:13px;font-weight:600;margin-bottom:14px;">{html.escape(badge)}</div>'
+                  if badge else "")
+    subtitle_html = (f'<p style="font-size:17px;color:#4b5563;margin:10px 0 0;">{html.escape(subtitle)}</p>'
+                     if subtitle else "")
+    pad = "20px 18px 56px" if device == "mobile" else "32px 24px 72px"
+    font = "24px" if device == "mobile" else "30px"
+
+    return {"title": c.get("title") or spec.title, "html": f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title></head>
+<body style="margin:0;font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:#fafafa;color:#111827;">
+<div style="max-width:680px;margin:0 auto;padding:{pad};">
+  {badge_html}
+  <h1 style="font-size:{font};line-height:1.35;margin:0;">{title}</h1>
+  {subtitle_html}
+  <div style="font-size:16px;line-height:1.9;color:#374151;margin-top:18px;">{body}</div>
+  <div style="margin-top:26px;">
+    <a id="ul-cta" href="{cta_url}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;
+       padding:14px 30px;border-radius:12px;font-size:16px;font-weight:600;">{cta_text}</a>
+    <div id="ul-dwell-note" style="display:none;margin-top:10px;font-size:13px;color:#6b7280;">{alt_note}</div>
+  </div>
+</div>
+<script>
+// 互动时长：停留 N 秒后强化 CTA（千人千面之"行为维度"）
+(function(){{
+  var secs = {secs}; if (!secs) return;
+  var cta = document.getElementById('ul-cta'), note = document.getElementById('ul-dwell-note');
+  var alt = {json.dumps(alt_text) if alt_text else 'null'};
+  setTimeout(function(){{
+    if (alt && cta) cta.textContent = alt;
+    if (cta) cta.style.background = '#16a34a';
+    if (note) note.style.display = 'block';
+  }}, secs * 1000);
+}})();
+</script>
+</body></html>"""}
+
+
