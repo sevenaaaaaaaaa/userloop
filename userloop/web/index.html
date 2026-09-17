@@ -261,7 +261,7 @@ function render(r){
     || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
 }
 
-function schedule(){ setTimeout(async ()=>{ if(!document.hidden) await load(); else schedule(); schedule(); }, pollMs); }
+function schedule(){ setTimeout(async ()=>{ if(!document.hidden) await load(); schedule(); }, pollMs); }
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
 
 // 侧栏高亮：跟随滚动，取最后一个越过顶部的分区

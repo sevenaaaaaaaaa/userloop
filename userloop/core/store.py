@@ -156,6 +156,7 @@ class Store:
         await self.db.execute("PRAGMA busy_timeout=5000")
         await self.db.execute("PRAGMA foreign_keys=ON")
         await self.db.execute("PRAGMA cache_size=-8000")  # 8MB page cache
+        await self.db.execute("PRAGMA wal_autocheckpoint=512")
         await self.db.executescript(SCHEMA)
         await self.db.commit()
         try:
@@ -165,6 +166,10 @@ class Store:
 
     async def close(self) -> None:
         if self.db:
+            try:
+                await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # 收尾压缩 WAL，防文件膨胀
+            except aiosqlite.Error:
+                pass
             await self.db.close()
             self.db = None
 
@@ -305,6 +310,7 @@ class Store:
             noise_removed = cur.rowcount or 0
         try:
             await self.db.execute("PRAGMA optimize")
+            await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # 清理后压缩 WAL（DB 使用教训）
         except aiosqlite.Error:
             pass
         return {"removed": removed, "noise_removed": noise_removed, "cutoff": cutoff}
