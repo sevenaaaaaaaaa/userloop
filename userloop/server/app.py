@@ -252,12 +252,21 @@ def create_app(data_dir: str | None = None) -> Any:
                       "actions": acts.get(x["id"], [])} for x in loops]
         events = [_hydr(e) for e in await store.list_events(limit=14)]
         users = [_hydr(u) for u in await store.list_users(limit=12)]
+        ai_rows = await store.list_ai_decisions(limit=12)
+        ai_out = []
+        for r in ai_rows:
+            item = dict(r)
+            if item.get("payload"):
+                item["payload"] = pj(item["payload"], {}) or {}
+            ai_out.append(item)
         newest = await store.newest_event_at()
-        version = f"{counts.get('users')}-{counts.get('events')}-{counts.get('loops')}-{counts.get('feedback')}-{newest or ''}"
+        version = (f"{counts.get('users')}-{counts.get('events')}-{counts.get('loops')}-"
+                   f"{counts.get('feedback')}-{len(ai_out)}-{newest or ''}")
         data = {"counts": counts, "stages": stages, "funnel": _funnel(stages),
                 "loop_status": loop_status, "template_stats": template_stats,
                 "recent_transitions": transitions, "loops": loops_out,
-                "events": events, "users": users}
+                "events": events, "users": users,
+                "ai_decisions": ai_out, "ai_counts": await store.ai_decision_counts()}
         return data, version
 
     @app.get(f"{prefix}/api/v1/overview")
@@ -395,6 +404,66 @@ def create_app(data_dir: str | None = None) -> Any:
         for r in rows:
             out.append({**r, "trace": json.loads(r.get("trace") or "[]")})
         return JSONResponse({"count": len(out), "runs": out})
+
+    # ---- AI 大脑（全域全生命周期运营 AI）----
+
+    @app.get(f"{prefix}/api/v1/ai/decisions")
+    async def ai_decisions(status: str | None = None, limit: int = 30) -> JSONResponse:
+        rows = await store.list_ai_decisions(status=status, limit=limit)
+        out = []
+        for r in rows:
+            item = dict(r)
+            if item.get("payload"):
+                item["payload"] = pj(item["payload"], {}) or {}
+            out.append(item)
+        return JSONResponse({"count": len(out), "decisions": out,
+                             "counts": await store.ai_decision_counts()})
+
+    @app.post(f"{prefix}/api/v1/ai/decide")
+    async def ai_decide(request: Request) -> JSONResponse:
+        """手动触发：对指定用户（或批次）跑一次 AI 决策。"""
+        from userloop.ai import brain as brain_mod
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        distinct_id = body.get("distinct_id")
+        force = bool(body.get("force"))
+        if distinct_id:
+            user = await store.find_user(distinct_id)
+            if not user:
+                raise HTTPException(status_code=404, detail="user not found")
+            rec = await brain_mod.run_for_user(store, ctx, user, force=force)
+            return JSONResponse({"ok": True, "decision": rec})
+        recs = await brain_mod.run_batch(store, ctx, limit=int(body.get("limit", 3)), force=True)
+        return JSONResponse({"ok": True, "count": len(recs), "decisions": recs})
+
+    @app.post(f"{prefix}/api/v1/ai/decisions/{{decision_id}}/approve")
+    async def ai_approve(decision_id: str) -> JSONResponse:
+        """人工批准：执行待审批的 AI 决策（风险门的人工出口）。"""
+        from userloop.ai import brain as brain_mod
+
+        rec = await store.get_ai_decision(decision_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="decision not found")
+        if rec["status"] != "pending_approval":
+            raise HTTPException(status_code=400, detail=f"status is {rec['status']}, not pending_approval")
+        user = await store.get_user(rec["user_id"])
+        payload = pj(rec.get("payload"), {}) or {}
+        loop = await brain_mod.execute_intent(store, ctx, user, rec["intent"],
+                                              {"reasoning": rec.get("reasoning"),
+                                               "expected_effect": rec.get("expected_effect")}, payload=payload)
+        await store.update_ai_decision(decision_id, status="approved", loop_id=loop["id"] if loop else None)
+        return JSONResponse({"ok": True, "loop_id": loop["id"] if loop else None})
+
+    @app.post(f"{prefix}/api/v1/ai/decisions/{{decision_id}}/reject")
+    async def ai_reject(decision_id: str) -> JSONResponse:
+        rec = await store.get_ai_decision(decision_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="decision not found")
+        await store.update_ai_decision(decision_id, status="rejected")
+        return JSONResponse({"ok": True})
 
     # ---- 运维 API ----
 

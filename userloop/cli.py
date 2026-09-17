@@ -94,6 +94,62 @@ def mcp(data_dir: str | None) -> None:
 
 @main.command()
 @click.option("--data-dir", default=None)
+@click.option("--user", "distinct_id", default=None, help="只对指定用户决策（distinct_id）")
+@click.option("--limit", default=3, help="批次用户数")
+@click.option("--force", is_flag=True, help="跳过频控/静默期/审批门（人工触发）")
+def brain(data_dir: str | None, distinct_id: str | None, limit: int, force: bool) -> None:
+    """AI 大脑：为生命周期中的用户决定下一步最佳动作（全域全运营 AI）。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.ai import brain as brain_mod
+        from userloop.core.store import Store
+        from userloop.core.templates import seed_templates
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"])
+        await store.connect()
+        await seed_templates(store, cfg["data_dir"])
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        try:
+            if distinct_id:
+                user = await store.find_user(distinct_id)
+                if not user:
+                    console.print(f"[red]用户不存在：{distinct_id}[/]")
+                    return
+                rec = await brain_mod.run_for_user(store, ctx, user, force=force)
+                _print_decisions([rec])
+            else:
+                recs = await brain_mod.run_batch(store, ctx, limit=limit, force=force)
+                if not recs:
+                    console.print("（AI 大脑未启用：config.json → ai.brain.enabled=true 后生效，或用 --force）")
+                    return
+                _print_decisions(recs)
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+def _print_decisions(recs: list[dict]) -> None:
+    table = Table(title="AI 决策（全域全生命周期运营）")
+    table.add_column("用户", style="cyan")
+    table.add_column("阶段")
+    table.add_column("意图")
+    table.add_column("风险 / 状态")
+    table.add_column("理由", overflow="fold")
+    table.add_column("置信")
+    for r in recs:
+        table.add_row(
+            (r.get("user_id") or "")[:14], str(r.get("stage") or ""), str(r.get("intent") or ""),
+            f"{r.get('risk')} / {r.get('status')}", (r.get("reasoning") or "")[:80],
+            f"{float(r.get('confidence') or 0):.2f}",
+        )
+    console.print(table)
+
+
+@main.command()
+@click.option("--data-dir", default=None)
 def stats(data_dir: str | None) -> None:
     """查看运营看板摘要。"""
 

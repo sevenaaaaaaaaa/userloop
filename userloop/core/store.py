@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiosqlite
@@ -122,6 +123,28 @@ CREATE TABLE IF NOT EXISTS canvas_waits (
     status TEXT NOT NULL DEFAULT 'pending'
 );
 CREATE INDEX IF NOT EXISTS idx_waits_due ON canvas_waits(status, resume_at);
+
+CREATE TABLE IF NOT EXISTS ai_decisions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    stage TEXT,
+    intent TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'none',
+    risk TEXT NOT NULL DEFAULT 'low',
+    status TEXT NOT NULL DEFAULT 'noop',
+    reasoning TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0,
+    expected_effect TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL DEFAULT '',
+    payload TEXT,
+    loop_id TEXT,
+    model TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_user ON ai_decisions(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_status ON ai_decisions(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_created ON ai_decisions(created_at);
 """
 
 
@@ -511,8 +534,81 @@ class Store:
         cols = ", ".join(f"{k}=?" for k in fields)
         await self.db.execute(f"UPDATE canvas_waits SET {cols} WHERE id=?", (*fields.values(), wait_id))
 
-    # ---- feedback ----
+    # ---- AI 决策审计 ----
 
+    async def insert_ai_decision(self, d: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO ai_decisions (id, user_id, stage, intent, channel, risk, status, reasoning, "
+            "confidence, expected_effect, topic, payload, loop_id, model, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (d["id"], d["user_id"], d.get("stage"), d["intent"], d.get("channel", "none"),
+             d.get("risk", "low"), d.get("status", "noop"), d.get("reasoning", ""),
+             float(d.get("confidence") or 0), d.get("expected_effect", ""), d.get("topic", ""),
+             j(d.get("payload")) if d.get("payload") is not None else None, d.get("loop_id"),
+             d.get("model"), iso_now(), iso_now()),
+        )
+
+    async def update_ai_decision(self, decision_id: str, **fields: Any) -> None:
+        assert self.db
+        fields.setdefault("updated_at", iso_now())
+        cols = ", ".join(f"{k}=?" for k in fields)
+        await self.db.execute(f"UPDATE ai_decisions SET {cols} WHERE id=?", (*fields.values(), decision_id))
+
+    async def get_ai_decision(self, decision_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM ai_decisions WHERE id=?", (decision_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_ai_decisions(self, status: str | None = None, limit: int = 30) -> list[dict]:
+        assert self.db
+        if status:
+            cur = await self.db.execute(
+                "SELECT * FROM ai_decisions WHERE status=? ORDER BY created_at DESC LIMIT ?", (status, limit))
+        else:
+            cur = await self.db.execute(
+                "SELECT * FROM ai_decisions ORDER BY created_at DESC LIMIT ?", (limit,))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def ai_decision_counts(self) -> dict[str, int]:
+        assert self.db
+        cur = await self.db.execute("SELECT status, COUNT(*) c FROM ai_decisions GROUP BY status")
+        return {r["status"]: r["c"] for r in await cur.fetchall()}
+
+    async def ai_decisions_today(self) -> int:
+        """当日 AI 决策数（预算控制）。"""
+        assert self.db
+        day = datetime.utcnow().date().isoformat()
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c FROM ai_decisions WHERE created_at>=?", (day + "T00:00:00Z",))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def touches_since(self, user_id: str, hours: int) -> int:
+        """窗口内已执行触达数（频控依据，走索引）。"""
+        assert self.db
+        since = (datetime.utcnow() - timedelta(hours=hours)).isoformat(timespec="seconds") + "Z"
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c FROM actions a JOIN loops l ON a.loop_id=l.id "
+            "WHERE l.user_id=? AND a.executed_at>=? AND a.type NOT IN ('noop')", (user_id, since))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def ai_candidates(self, limit: int = 5) -> list[dict]:
+        """候选用户：非访客优先、最近活跃、且按最后触达时间排序（成本有界）。"""
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT * FROM users WHERE stage != 'visitor' ORDER BY last_seen DESC LIMIT ?", (limit * 3,))
+        rows = [dict(r) for r in await cur.fetchall()]
+        scored = []
+        for u in rows:
+            touched = await self.touches_since(u["id"], hours=24)
+            scored.append((touched, u.get("last_seen") or "", u))
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=False)
+        return [u for _, _, u in scored[:limit]]
+
+    # ---- feedback ----
     async def insert_feedback(self, f: dict) -> None:
         assert self.db
         await self.db.execute(

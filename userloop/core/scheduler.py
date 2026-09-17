@@ -129,6 +129,17 @@ async def prune_data(store: Store, retention_days: int = 180, min_interval_hours
     return result
 
 
+async def run_ai_brain(store: Store, ctx: ExecutorContext) -> list[dict]:
+    """AI 大脑批次任务（频次受限：默认每 30 分钟一批，每批成本有界）。"""
+    from userloop.ai import brain as brain_mod
+
+    brain_cfg = ((ctx.config.get("ai") or {}).get("brain") or {})
+    if not brain_cfg.get("enabled", False):
+        return []
+    limit = int(brain_cfg.get("batch_size", 5))
+    return await brain_mod.run_batch(store, ctx, limit=limit)
+
+
 def build_scheduler(store: Store, ctx: ExecutorContext):
     """APScheduler 常驻编排（server 模式使用）。"""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -143,5 +154,7 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
     sched.add_job(resume_canvas_waits, "interval", seconds=30, args=[store, ctx], id="canvas_waits",
                   max_instances=1, coalesce=True)
     sched.add_job(prune_data, "interval", hours=6, args=[store], id="prune",
+                  max_instances=1, coalesce=True)
+    sched.add_job(run_ai_brain, "interval", minutes=30, args=[store, ctx], id="ai_brain",
                   max_instances=1, coalesce=True)
     return sched

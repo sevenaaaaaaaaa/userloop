@@ -57,6 +57,11 @@
       用户档案
       <span class="bd" id="bd-users"></span>
     </a>
+    <a class="nv" href="#sec-ai" data-sec="sec-ai">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4.5"/><path d="M12 7.5V12l3 2"/></svg>
+      AI 大脑
+      <span class="bd" id="bd-ai"></span>
+    </a>
     <a class="nv" href="#sec-events" data-sec="sec-events">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 8-4-16-3 8H2"/></svg>
       事件流
@@ -127,6 +132,19 @@
         <div class="p-head"><h3>用户档案（CDP）</h3><span class="p-sub">最近活跃用户</span></div>
         <div class="p-body">
           <table><thead><tr><th>ID</th><th>邮箱</th><th>阶段</th><th>购买</th><th>事件数</th><th>最近活跃</th></tr></thead><tbody id="users"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-ai">
+      <div class="panel">
+        <div class="p-head">
+          <h3>AI 运营大脑 · 下一步最佳动作</h3>
+          <span class="p-sub" id="ai-sub">全生命周期决策 · 频控 + 风险门 + 审计</span>
+          <button class="btn primary sm" onclick="aiDecide()">▶ 立即决策一批</button>
+        </div>
+        <div class="p-body">
+          <table><thead><tr><th>时间</th><th>用户</th><th>阶段</th><th>意图</th><th>风险/状态</th><th>理由</th><th>置信</th><th>操作</th></tr></thead><tbody id="ai"></tbody></table>
         </div>
       </div>
     </section>
@@ -259,6 +277,41 @@ function render(r){
       <div class="b"><div class="t">${e.event}</div><div class="d">${e.distinct_id}</div></div>
       <div class="tm">${fmt(e.created_at)}</div></div>`).join('')
     || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
+
+  // AI 大脑决策面板
+  const ac = d.ai_counts||{};
+  $('bd-ai').textContent = (ac.pending_approval ? ac.pending_approval + '!' : '') || '';
+  $('ai-sub').textContent = `全生命周期决策 · 自动 ${ac.auto_executed||0} · 待批 ${ac.pending_approval||0} · 静默 ${ac.noop||0}`;
+  $('ai').innerHTML = (d.ai_decisions||[]).map(x=>{
+    const ops = x.status==='pending_approval'
+      ? `<button class="btn primary sm" onclick="aiApprove('${x.id}')">批准执行</button> <button class="btn ghost sm" onclick="aiReject('${x.id}')">驳回</button>`
+      : (x.loop_id ? `<span class="tag mono">${x.loop_id.slice(0,12)}</span>` : '—');
+    const st = x.status==='pending_approval' ? 'warn' : (x.status==='auto_executed'||x.status==='approved') ? 'ok' : x.status==='rejected'||x.status==='failed' ? 'danger' : '';
+    return `<tr><td class="mono" style="color:var(--faint)">${fmt(x.created_at)}</td>
+      <td class="mono">${(x.user_id||'').slice(0,10)}</td>
+      <td>${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
+      <td class="mono">${x.intent}</td>
+      <td><span class="tag ${st}">${x.risk} / ${x.status}</span></td>
+      <td style="color:var(--muted);max-width:320px">${x.reasoning||''}</td>
+      <td class="mono">${(x.confidence||0).toFixed(2)}</td><td>${ops}</td></tr>`;
+  }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
+}
+
+async function aiDecide(){
+  toast('AI 决策中…');
+  try{
+    const r = await (await fetch('api/v1/ai/decide', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({limit:3, force:true})})).json();
+    toast(`已决策 ${r.count || 1} 条`); await load(true);
+  }catch(e){ toast('决策失败：'+e.message); }
+}
+async function aiApprove(id){
+  const r = await (await fetch(`api/v1/ai/decisions/${id}/approve`, {method:'POST'})).json();
+  toast(r.ok ? '已批准执行' : '批准失败'); load(true);
+}
+async function aiReject(id){
+  await fetch(`api/v1/ai/decisions/${id}/reject`, {method:'POST'});
+  toast('已驳回'); load(true);
 }
 
 function schedule(){ setTimeout(async ()=>{ if(!document.hidden) await load(); schedule(); }, pollMs); }
