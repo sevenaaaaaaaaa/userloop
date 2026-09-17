@@ -227,11 +227,10 @@ function render(r){
     <div class="kpi"><div class="k-label">付费转化</div><div class="k-val">${conv('paying')}</div><div class="k-sub">paying / 全部用户</div></div>`;
 
   const fmax = Math.max(1, ...(d.funnel||[]).map(f=>f.users));
-  let prev = null;
   $('funnel').innerHTML = (d.funnel||[]).map(f=>{
-    const rate = prev!==null && prev>0 ? `转化 ${Math.round(f.users/prev*100)}%` : '';
-    const html = bar(STAGE_LABEL[f.stage]||f.stage, f.users, fmax, rate);
-    prev = f.users; return html;
+    // 转化率按「占全部用户」计算（用户可跨阶段跃迁，逐级相除会出现 >100%）
+    const share = total ? Math.round(f.users/total*100)+'%' : '—';
+    return bar(STAGE_LABEL[f.stage]||f.stage, f.users, fmax, `占全部 ${share}`);
   }).join('');
   $('funnel-sub').textContent = `总用户 ${total} · 付费率 ${conv('paying')}`;
 
