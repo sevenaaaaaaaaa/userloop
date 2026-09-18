@@ -460,7 +460,7 @@ function render(r){
 
   $('transitions').innerHTML = (d.recent_transitions||[]).map(t=>`
     <tr><td class="mono">${(t.user_id||'').slice(0,12)}</td>
-    <td>${STAGE_LABEL[t.from_stage]||t.from_stage} → <b>${STAGE_LABEL[t.to_stage]||t.to_stage}</b></td>
+    <td class="nw">${STAGE_LABEL[t.from_stage]||t.from_stage} → <b>${STAGE_LABEL[t.to_stage]||t.to_stage}</b></td>
     <td style="color:var(--muted)">${t.reason||''}</td><td class="mono" style="color:var(--faint)">${fmt(t.created_at)}</td></tr>`).join('')
     || '<tr><td colspan="4" style="color:var(--faint)">暂无迁移</td></tr>';
 
@@ -474,7 +474,7 @@ function render(r){
 
   $('users').innerHTML = (d.users||[]).map(u=>{
     const st=u.stats||{};
-    return `<tr><td class="mono">${u.distinct_id}</td><td>${u.email||'—'}</td>
+    return `<tr><td class="mono wrap">${u.distinct_id}</td><td class="wrap">${u.email||'—'}</td>
       <td><span class="tag ${u.stage==='paying'||u.stage==='retained'||u.stage==='advocate'?'ok':u.stage==='visitor'?'':'accent'}">${STAGE_LABEL[u.stage]||u.stage}</span></td>
       <td class="mono">${st.purchases||0}</td><td class="mono">${st.event_count||0}</td>
       <td class="mono" style="color:var(--faint)">${fmt(u.last_seen)}</td></tr>`;
@@ -493,14 +493,14 @@ function render(r){
                                           j('api/v1/predictions?sort=ltv&limit=8')]);
       $('churnSub').textContent = `共 ${ch.count} 条（churn 分数 + 归因）`;
       $('churnTop').innerHTML = (ch.items||[]).map(x=>`
-        <tr><td class="mono">${x.distinct_id}</td><td>${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-        <td class="mono" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${x.churn}</td>
+        <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
+        <td class="mono nw" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${x.churn}</td>
         <td class="wrap" style="color:var(--muted);max-width:280px"><div class="clamp2" title="${esc(((x.reasons||{}).churn||[])[0]||'')}">${((x.reasons||{}).churn||[])[0]||'—'}</div></td>
         <td><button class="btn ghost sm" onclick="prDecide('${x.distinct_id}')">让 AI 决策</button></td></tr>`).join('')
         || '<tr><td colspan="5" style="color:var(--faint)">暂无数据（点「立即重算一批」）</td></tr>';
       $('ltvTop').innerHTML = (lt.items||[]).map(x=>`
-        <tr><td class="mono">${x.distinct_id}</td><td>${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-        <td class="mono">${x.ltv}</td><td><span class="tag ${x.tier==='vip'||x.tier==='high'?'ok':''}">${x.tier||'—'}</span></td>
+        <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
+        <td class="mono nw">${x.ltv}</td><td><span class="tag ${x.tier==='vip'||x.tier==='high'?'ok':''}">${x.tier||'—'}</span></td>
         <td class="mono">${x.propensity}</td></tr>`).join('')
         || '<tr><td colspan="5" style="color:var(--faint)">暂无数据</td></tr>';
     } catch(e) { /* 静默 */ }
@@ -552,8 +552,8 @@ function render(r){
     const st = x.status==='pending_approval' ? 'warn' : (x.status==='auto_executed'||x.status==='approved') ? 'ok' : x.status==='rejected'||x.status==='failed' ? 'danger' : '';
     return `<tr><td class="mono" style="color:var(--faint)">${fmt(x.created_at)}</td>
       <td class="mono">${(x.user_id||'').slice(0,10)}</td>
-      <td>${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-      <td class="mono">${x.intent}</td>
+      <td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
+      <td class="mono nw">${x.intent}</td>
       <td><span class="tag ${st}">${x.risk} / ${x.status}</span></td>
       <td class="wrap" style="color:var(--muted);max-width:360px"><div class="clamp3" title="${esc(x.reasoning||'')}">${x.reasoning||''}</div></td>
       <td class="mono">${(x.confidence||0).toFixed(2)}</td><td>${ops}</td></tr>`;
