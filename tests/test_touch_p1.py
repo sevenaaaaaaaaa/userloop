@@ -103,7 +103,8 @@ async def test_sms_driver_compliance_and_send(tmp_path) -> None:
         await identity.bind(store, u["id"], "phone", "13800000001")
         u = await store.get_user(u["id"])
         ctx = ExecutorContext(str(tmp_path), {"touch": {"sms": {
-            "enabled": True, "provider": "webhook", "webhook_url": "http://sms.test/send"}}})
+            "enabled": True, "provider": "webhook", "webhook_url": "http://sms.test/send"},
+            "frequency": {"quiet_hours": []}}})
         ctx.store = store
         res = await execute_action(
             ctx,
