@@ -298,3 +298,44 @@ async def test_scheduler_path_logs_block_and_sent(tmp_path) -> None:
         assert ctx.store is store                     # 入口已自动挂载
     finally:
         await store.close()
+
+
+async def test_sto_defers_to_best_hour_once(tmp_path) -> None:
+    """STO：不在用户活跃时段 → 推迟一次（改了 scheduled_at 且带 _sto_deferred 标记）。"""
+    from datetime import datetime, timedelta
+    from userloop.core.store import new_id
+
+    store = Store(str(tmp_path / "sto.db"), {})
+    await store.connect()
+    try:
+        u = await store.upsert_user("sto1", email="sto1@x.com")
+        # best_hour 设为当前本地小时的 +6（确保不在窗口内）
+        local_hour = (datetime.utcnow() + timedelta(hours=8)).hour
+        bh = (local_hour + 6) % 24
+        await store.upsert_user_score({"user_id": u["id"], "churn": 0, "ltv": 0, "propensity": 0,
+                                       "tier": "low", "best_hour": bh, "reasons": {},
+                                       "computed_at": "2026-09-18T00:00:00Z"})
+        ctx = ExecutorContext(str(tmp_path), {
+            "touch": {"frequency": {"enabled": False}, "sto": {"enabled": True, "window_hours": 2},
+                      "qc": {"enabled": False}, "track_secret": "s", "public_base": "https://ul.test"},
+            "api_token": "x"})
+        ctx.store = store
+        loop_id = new_id("loop")
+        await store.insert_loop({"id": loop_id, "template_id": "tpl", "user_id": u["id"], "status": "running",
+                                 "trigger": {}, "context": {}, "created_at": "2026-09-18T00:00:00Z",
+                                 "updated_at": "2026-09-18T00:00:00Z"})
+        aid = new_id("act")
+        await store.insert_action({"id": aid, "loop_id": loop_id, "seq": 1, "type": "touch.email",
+                                   "payload": {"subject": "s", "text": "b"}, "delay_minutes": 0,
+                                   "status": "pending", "scheduled_at": "2026-09-18T00:00:00Z"})
+        from userloop.core.scheduler import process_due_actions
+
+        results = await process_due_actions(store, ctx)
+        assert results and results[0].get("deferred_by_sto") is True
+        rows = await store.actions_for_loop(loop_id)
+        assert rows[0]["status"] == "pending"                       # 已重排回 pending
+        import json as _json
+
+        assert _json.loads(rows[0]["payload"]).get("_sto_deferred") is True
+    finally:
+        await store.close()

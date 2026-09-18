@@ -44,6 +44,10 @@ async def process_due_actions(store: Store, ctx: ExecutorContext, limit: int = 5
         if not user:
             continue
         result = await execute_action(ctx, action, loop, user)
+        if result.get("deferred_by_sto"):
+            # STO 已把动作重排回 pending：不要覆盖状态（等待最佳时段再发）
+            results.append({"action_id": action["id"], "loop_id": action["loop_id"], **result})
+            continue
         await store.update_action(
             action["id"],
             status=ActionStatus.DONE if result.get("ok") else ActionStatus.FAILED,
@@ -60,6 +64,12 @@ async def _mark_loop(store: Store, loop_id: str) -> None:
         return
     loop = await store.get_loop(loop_id)
     if not loop or loop["status"] != LoopStatus.RUNNING:
+        return
+    # 被门禁拦下的（频控/退订/STO）不算完成：Loop 置 skipped，避免误判为已验证
+    blocked = any(a["status"] == ActionStatus.FAILED for a in actions)
+    if blocked:
+        await store.update_loop(loop_id, status=LoopStatus.SKIPPED,
+                                error="action blocked by gate (frequency/suppression)")
         return
     templates = {t["id"]: t for t in await store.get_templates(enabled_only=False)}
     template = templates.get(loop["template_id"])
@@ -135,7 +145,9 @@ async def recompute_predictions(store: Store, ctx: ExecutorContext) -> int:
     ctx.store = store
     from userloop.predict import engine as predict
 
-    return await predict.run_batch(store, limit=int(((ctx.config.get("predict") or {}).get("batch_size")) or 50))
+    pc = ctx.config.get("predict") or {}
+    tz = int(((ctx.config.get("touch") or {}).get("frequency") or {}).get("tz_offset_hours", 8))
+    return await predict.run_batch(store, limit=int(pc.get("batch_size") or 50), tz_offset=tz)
 
 
 async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:

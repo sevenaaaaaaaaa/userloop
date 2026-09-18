@@ -885,6 +885,116 @@ def create_app(data_dir: str | None = None) -> Any:
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
 
+    # ---- 合规中心（consent / DSAR）----
+
+    @app.post(f"{prefix}/api/v1/compliance/consent")
+    async def compliance_consent(request: Request) -> JSONResponse:
+        """记录同意（purpose: marketing|analytics 等）。"""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid json")
+        did = str(body.get("distinct_id") or "").strip()
+        purpose = str(body.get("purpose") or "marketing").strip()
+        if not did:
+            raise HTTPException(status_code=400, detail="缺少 distinct_id")
+        user = await store.find_user(did) or await store.upsert_user(did)
+        granted = bool(body.get("granted"))
+        await store.set_consent(user["id"], purpose, granted, source=str(body.get("source") or "api"))
+        # 退订/撤回同意 → 直接抑制该渠道
+        if not granted and purpose in ("marketing", "email", "sms"):
+            props = pj(user.get("props"), {}) or {}
+            props[f"{purpose}_unsubscribed"] = True
+            await store.update_user(user["id"], props=json.dumps(props, ensure_ascii=False))
+        return JSONResponse({"ok": True, "user_id": user["id"], "purpose": purpose, "granted": granted})
+
+    @app.get(f"{prefix}/api/v1/compliance/consent")
+    async def compliance_consent_get(distinct_id: str) -> JSONResponse:
+        user = await store.find_user(distinct_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="user not found")
+        return JSONResponse({"user_id": user["id"], "consents": await store.list_consents(user["id"])})
+
+    @app.get(f"{prefix}/api/v1/compliance/export")
+    async def compliance_export(distinct_id: str) -> JSONResponse:
+        """DSAR 导出：该用户全部数据（JSON 交付）。"""
+        user = await store.find_user(distinct_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="user not found")
+        data = await store.export_user_data(user["id"])
+        return JSONResponse({"ok": True, "distinct_id": distinct_id, "data": data})
+
+    @app.post(f"{prefix}/api/v1/compliance/erase")
+    async def compliance_erase(request: Request) -> JSONResponse:
+        """DSAR 删除：不可逆清除该用户全部数据（需 confirm=ERASE 二次确认）。"""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if str(body.get("confirm") or "") != "ERASE":
+            raise HTTPException(status_code=400, detail="需要 confirm=ERASE 二次确认")
+        did = str(body.get("distinct_id") or "").strip()
+        user = await store.find_user(did)
+        if not user:
+            raise HTTPException(status_code=404, detail="user not found")
+        out = await store.erase_user(user["id"])
+        return JSONResponse(out)
+
+    # ---- 自然语言分群 ----
+
+    @app.post(f"{prefix}/api/v1/segments/nl")
+    async def segments_nl(request: Request) -> JSONResponse:
+        """一句话生成分群规则（草稿 + 强校验），并返回命中预览。"""
+        from userloop.segments import nl as nlseg
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        prompt = str(body.get("prompt") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="缺少 prompt")
+        res = await nlseg.draft(ctx, prompt)
+        if res.get("ok") and body.get("preview", True):
+            res["preview"] = await nlseg.preview(store, res["segment"])
+        return JSONResponse(res)
+
+    @app.get(f"{prefix}/api/v1/segments")
+    async def segments_list() -> JSONResponse:
+        rows = await store.list_segments()
+        out = []
+        for r in rows:
+            from userloop.segments import nl as nlseg
+
+            p = await nlseg.preview(store, r)
+            out.append({**r, "count": p["count"], "sample": p["sample"][:3]})
+        return JSONResponse({"count": len(out), "segments": out})
+
+    @app.post(f"{prefix}/api/v1/segments")
+    async def segments_save(request: Request) -> JSONResponse:
+        from userloop.segments import nl as nlseg
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        seg = body.get("segment") or {}
+        if not isinstance(seg, dict) or not seg.get("rules"):
+            raise HTTPException(status_code=400, detail="segment 无效（缺少 rules）")
+        seg, warnings = nlseg._clamp_rules(seg)
+        await store.put_segment(seg)
+        return JSONResponse({"ok": True, "id": seg["id"], "warnings": warnings, "segment": seg})
+
+    @app.get(f"{prefix}/api/v1/segments/{{seg_id}}/users")
+    async def segments_users(seg_id: str, limit: int = 100) -> JSONResponse:
+        from userloop.segments import nl as nlseg
+
+        seg = await store.get_segment(seg_id)
+        if not seg:
+            raise HTTPException(status_code=404, detail="segment not found")
+        p = await nlseg.preview(store, seg)
+        return JSONResponse({**p, "sample": p["sample"][: max(1, min(limit, 500))]})
+
     # ---- 预测层 API ----
 
     @app.get(f"{prefix}/api/v1/predictions")

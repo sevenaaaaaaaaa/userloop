@@ -139,7 +139,27 @@ def propensity(user: dict, events: list[dict], target: str = "purchase") -> dict
     return {"score": round(score, 3), "reasons": reasons, "intent_hits": intent_hits}
 
 
-async def compute(store: Store, user: dict, events: list[dict] | None = None) -> dict[str, Any]:
+def best_hour(events: list[dict], tz_offset: int = 8, min_samples: int = 5) -> int | None:
+    """STO：按事件时间分布推断该用户最活跃小时（本地时区）；样本不足返回 None。"""
+    from collections import Counter
+
+    hours: Counter[int] = Counter()
+    now = datetime.utcnow()
+    for e in events:
+        t = _parse(e.get("created_at"))
+        if not t:
+            continue
+        # 近期事件权重更高（半衰期 30 天）
+        age = (now - t).total_seconds() / 86400
+        weight = max(0.2, 1.0 - age / 60.0)
+        hours[(t + timedelta(hours=tz_offset)).hour] += weight
+    if sum(hours.values()) < min_samples:
+        return None
+    return hours.most_common(1)[0][0]
+
+
+async def compute(store: Store, user: dict, events: list[dict] | None = None,
+                  tz_offset: int = 8) -> dict[str, Any]:
     """计算并落库某用户的三个分数。"""
     if events is None:
         events = await store.recent_events_for_user(user["id"], limit=300)
@@ -158,20 +178,22 @@ async def compute(store: Store, user: dict, events: list[dict] | None = None) ->
     pr = propensity(user, events)
     row = {"user_id": user["id"], "churn": ch["score"], "ltv": lt["score"],
            "propensity": pr["score"], "tier": lt["tier"],
+           "best_hour": best_hour(events, tz_offset=tz_offset),
            "reasons": {"churn": ch["reasons"], "ltv": lt["reasons"], "propensity": pr["reasons"]},
            "computed_at": iso_now()}
     await store.upsert_user_score(row)
     return row
 
 
-async def run_batch(store: Store, limit: int = 50, only_identified: bool = True) -> int:
+async def run_batch(store: Store, limit: int = 50, only_identified: bool = True,
+                    tz_offset: int = 8) -> int:
     """批量重算（优先近期活跃；只算实名用户，避免给匿名噪音打分）。"""
     cur = await store.db.execute(
         "SELECT * FROM users WHERE stage != 'visitor' ORDER BY last_seen DESC LIMIT ?" if only_identified
         else "SELECT * FROM users ORDER BY last_seen DESC LIMIT ?", (limit,))
     rows = [dict(r) for r in await cur.fetchall()]
     for u in rows:
-        await compute(store, u)
+        await compute(store, u, tz_offset=tz_offset)
     return len(rows)
 
 
