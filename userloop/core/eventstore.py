@@ -76,6 +76,7 @@ class EventStore(Protocol):
     async def recent(self, limit: int) -> list[dict]: ...
     async def recent_for_user(self, user_id: str, limit: int) -> list[dict]: ...
     async def newest_at(self) -> str | None: ...
+    async def count_by_event_since(self, event: str, since: str) -> int: ...
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict: ...
     async def total(self) -> int: ...
     async def close(self) -> None: ...
@@ -137,6 +138,12 @@ class SqliteEventStore:
         cur = await self.db.execute("SELECT created_at FROM events ORDER BY id DESC LIMIT 1")
         row = await cur.fetchone()
         return row["created_at"] if row else None
+
+    async def count_by_event_since(self, event: str, since: str) -> int:
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c FROM events WHERE event=? AND created_at>=?", (event, since))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"
@@ -233,6 +240,11 @@ class MySqlEventStore:
     async def newest_at(self) -> str | None:
         rows = await self._rows("SELECT created_at FROM events ORDER BY id DESC LIMIT 1")
         return rows[0]["created_at"] if rows else None
+
+    async def count_by_event_since(self, event: str, since: str) -> int:
+        rows = await self._rows(
+            "SELECT COUNT(*) c FROM events WHERE event=%s AND created_at>=%s", (event, since))
+        return int(rows[0]["c"]) if rows else 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"

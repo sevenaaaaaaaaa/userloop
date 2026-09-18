@@ -633,6 +633,37 @@ class Store:
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
+    async def of_user_identities(self, user_id: str) -> dict[str, str]:
+        """该用户在各渠道的标识（email/phone/openid/wecom 等）。"""
+        assert self.db
+        cur = await self.db.execute("SELECT type, value FROM identities WHERE user_id=?", (user_id,))
+        return {r["type"]: r["value"] for r in await cur.fetchall()}
+
+    async def recent_touches(self, user_id: str, hours: int = 168) -> list[dict]:
+        """窗口内已执行的触达明细（含动作类型/时间），供跨渠道频控与渠道选择使用。"""
+        assert self.db
+        since = (datetime.utcnow() - timedelta(hours=hours)).isoformat(timespec="seconds") + "Z"
+        cur = await self.db.execute(
+            "SELECT a.id, a.type, a.executed_at, a.loop_id, l.template_id "
+            "FROM actions a JOIN loops l ON a.loop_id = l.id "
+            "WHERE l.user_id=? AND a.executed_at>=? AND a.status IN ('done','dispatched') "
+            "ORDER BY a.executed_at DESC", (user_id, since))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def channel_engagement(self, days: int = 30) -> dict[str, dict[str, int]]:
+        """全局渠道效果（近 N 天事件）：送达/打开/点击计数，供 Next Best Channel 打分。"""
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat(timespec="seconds") + "Z"
+        async def _count(event: str) -> int:
+            return int(await self.events.count_by_event_since(event, since))
+        out: dict[str, dict[str, int]] = {}
+        for channel, events in (("email", ("email_open", "email_click")),
+                                ("h5", ("h5_view", "h5_click")),
+                                ("sms", ("sms_click",)),
+                                ("im", ("im_click",))):
+            out[channel] = {e: await _count(e) for e in events}
+        out["email"]["delivered"] = int(await self.events.count_by_event_since("email_sent", since))
+        return out
+
     async def ai_candidates(self, limit: int = 5) -> list[dict]:
         """候选用户：非访客优先、最近活跃、且按最后触达时间排序（成本有界）。"""
         assert self.db

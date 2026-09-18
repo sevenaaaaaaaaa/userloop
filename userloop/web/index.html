@@ -107,6 +107,14 @@
           <div class="p-body"><div class="funnel" id="loopstatus"></div></div>
         </div>
       </div>
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>渠道效果（近 30 天）</h3><span class="p-sub">Next Best Channel 的评分依据</span></div>
+          <div class="p-body">
+            <table><thead><tr><th>渠道</th><th>送达</th><th>打开/浏览</th><th>点击</th><th>点击率</th></tr></thead><tbody id="channels"></tbody></table>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="sec-journey">
@@ -313,6 +321,18 @@ function render(r){
       <div class="b"><div class="t">${e.event}</div><div class="d">${e.distinct_id}</div></div>
       <div class="tm">${fmt(e.created_at)}</div></div>`).join('')
     || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
+
+  // 渠道效果（NB Channel 依据）
+  const ch = d.channels || {};
+  const chRows = Object.entries(ch).map(([name, v])=>{
+    const opens = (v.email_open||0) + (v.h5_view||0);
+    const clicks = (v.email_click||0) + (v.h5_click||0) + (v.sms_click||0) + (v.im_click||0);
+    const delivered = v.delivered || (opens + clicks);
+    const rate = delivered ? Math.round(clicks/delivered*100)+'%' : '—';
+    return `<tr><td><span class="tag">${name}</span></td><td class="mono">${delivered}</td>
+      <td class="mono">${opens}</td><td class="mono">${clicks}</td><td class="mono">${rate}</td></tr>`;
+  }).join('');
+  $('channels').innerHTML = chRows || '<tr><td colspan="5" style="color:var(--faint)">暂无渠道数据</td></tr>';
 
   // A/B 实验面板
   const abExps = d.experiments || [];

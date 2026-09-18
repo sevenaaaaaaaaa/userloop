@@ -93,6 +93,21 @@ async def execute_action(
 
     record = {"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"), "subject": subject, "text": text}
 
+    # 跨渠道全局频控：所有营销类动作（含模板 Loop 的 ai.email/email/feishu）统一过门
+    if not atype.startswith("touch."):
+        from userloop.touch import frequency as _freq
+
+        _channel = _freq.channel_of(atype)
+        if _channel in _freq.MARKETING_CHANNELS:
+            _gate = await _freq.check(getattr(ctx, "store", None), ctx, user, _channel,
+                                      template_id=loop.get("template_id"),
+                                      force=bool(payload.get("force")))
+            if not _gate["ok"]:
+                result.update(ok=False, blocked_by_frequency=True, note=_gate["reason"],
+                              frequency=_gate.get("counts") or {})
+                ctx.write_outbox({**record, **result})
+                return result
+
     # 生态适配器（openflow.* / mflow.* / ai.*）—— 对齐 inFlow docs/04 §4 动作路由器映射表
     if atype.startswith("openflow."):
         from userloop.integrations import openflow
