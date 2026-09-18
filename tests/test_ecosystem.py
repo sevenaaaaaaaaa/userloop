@@ -167,3 +167,14 @@ async def test_count_events_matching_uses_event_backend(store: Store) -> None:
     assert n == 1
     assert await store.count_events_matching("utm_campaign", "cmp-1", "2026-09-09T00:00:00Z",
                                              "2026-09-16T00:00:00Z") == 0
+
+
+async def test_attribution_counts_each_event_once(store: Store) -> None:
+    """同一事件同时命中 utm_campaign 与 url 时只计 1 次（此前会重复计数）。"""
+    u = await store.upsert_user("dup1")
+    await store.insert_event({"user_id": u["id"], "distinct_id": "dup1", "event": "page_view",
+                              "props": {"utm_campaign": "cmp-9", "url": "https://x/9"},
+                              "source": "web", "event_id": "dup-1", "created_at": "2026-09-08T10:00:00Z"})
+    n = await store.events.count_matching_any([("utm_campaign", "cmp-9"), ("url", "https://x/9")],
+                                              "2026-09-01T00:00:00Z", "2026-09-16T00:00:00Z")
+    assert n == 1
