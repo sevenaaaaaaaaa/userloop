@@ -24,17 +24,17 @@ def _ctx(tmp_path, cfg=None) -> ExecutorContext:
 
 
 async def _touch(store: Store, user: dict, atype: str, template: str = "tpl", hours_ago: float = 0) -> None:
-    """构造一条历史触达（直接写 loop+action，避免真的发消息）。"""
-    from userloop.core.store import new_id
+    """构造一条历史触达（写触点台账，等价于"真的发过一条"）。"""
+    from userloop.touch import frequency as fm
 
-    loop_id = new_id("loop")
-    ts = (datetime.utcnow() - timedelta(hours=hours_ago)).isoformat(timespec="seconds") + "Z"
-    await store.insert_loop({"id": loop_id, "template_id": template, "user_id": user["id"],
-                             "status": "verified", "trigger": {}, "context": {},
-                             "created_at": ts, "updated_at": ts})
-    await store.insert_action({"id": new_id("act"), "loop_id": loop_id, "seq": 1, "type": atype,
-                              "payload": {}, "delay_minutes": 0, "status": "done",
-                              "scheduled_at": ts, "executed_at": ts, "result": "{}"})
+    channel = fm.channel_of(atype)
+    await store.log_touch(user["id"], channel, atype, template_id=template, loop_id="loop_hist")
+    if hours_ago:   # 回填时间（台账默认 now）
+        await store.db.execute(
+            "UPDATE touch_log SET created_at=? WHERE id=(SELECT id FROM touch_log "
+            "WHERE user_id=? AND channel=? AND template_id=? ORDER BY id DESC LIMIT 1)",
+            ((datetime.utcnow() - timedelta(hours=hours_ago)).isoformat(timespec="seconds") + "Z",
+             user["id"], channel, template))
 
 
 # ── 频控门 ──

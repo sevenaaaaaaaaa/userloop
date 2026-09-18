@@ -72,13 +72,13 @@ def send_email(ctx: ExecutorContext, to: str, subject: str, text: str) -> dict[s
     return {"ok": True, "to": to}
 
 
-async def execute_action(
+async def _execute_action(
     ctx: ExecutorContext,
     action: dict,
     loop: dict,
     user: dict,
 ) -> dict[str, Any]:
-    """执行单个动作，返回 result dict（含 ok/dry_run/error）。"""
+    """动作执行内部实现（频控/台账由外层 execute_action 统一处理）。"""
     payload = action.get("payload") or {}
     # 容错：DB 原始行/双编码场景，递归解析到 dict 为止
     while isinstance(payload, str):
@@ -92,21 +92,6 @@ async def execute_action(
     subject = render_text(payload.get("subject") or "UserLoop 运营触达", user, loop)
 
     record = {"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"), "subject": subject, "text": text}
-
-    # 跨渠道全局频控：所有营销类动作（含模板 Loop 的 ai.email/email/feishu）统一过门
-    if not atype.startswith("touch."):
-        from userloop.touch import frequency as _freq
-
-        _channel = _freq.channel_of(atype)
-        if _channel in _freq.MARKETING_CHANNELS:
-            _gate = await _freq.check(getattr(ctx, "store", None), ctx, user, _channel,
-                                      template_id=loop.get("template_id"),
-                                      force=bool(payload.get("force")))
-            if not _gate["ok"]:
-                result.update(ok=False, blocked_by_frequency=True, note=_gate["reason"],
-                              frequency=_gate.get("counts") or {})
-                ctx.write_outbox({**record, **result})
-                return result
 
     # 生态适配器（openflow.* / mflow.* / ai.*）—— 对齐 inFlow docs/04 §4 动作路由器映射表
     if atype.startswith("openflow."):
@@ -177,4 +162,69 @@ async def execute_action(
         result.update(ok=False, error=str(exc))
 
     ctx.write_outbox({**record, **result})
+    return result
+
+
+async def execute_action(
+    ctx: ExecutorContext,
+    action: dict,
+    loop: dict,
+    user: dict,
+) -> dict[str, Any]:
+    """公开入口：**先过跨渠道频控门，再执行，成功后记触点台账**（统一覆盖所有链路）。
+
+    覆盖范围：模板 Loop / Canvas / AI 决策 / 直连调用，以及 touch.* 与 legacy 动作族。
+    """
+    from userloop.touch import frequency as _freq
+
+    atype = str(action.get("type", "generic"))
+    payload = action.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {}
+    channel = _freq.channel_of(atype)
+    store = getattr(ctx, "store", None)
+
+    # 硬规则优先于频控：退订/停用（原因更准确，避免把"已退订"说成"频控"）
+    if channel in _freq.MARKETING_CHANNELS:
+        props = user.get("props")
+        if isinstance(props, str):
+            try:
+                props = json.loads(props or "{}")
+            except json.JSONDecodeError:
+                props = {}
+        props = props if isinstance(props, dict) else {}
+        if channel == "sms" and (props.get("sms_unsubscribed") or props.get("unsubscribed_sms")):
+            blocked = {"type": atype, "channel": channel, "ok": False, "blocked_by_suppression": True,
+                       "note": "用户已退订短信（sms_unsubscribed）"}
+            ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
+                              "subject": "", "text": "", **blocked})
+            return blocked
+        if channel == "email" and (props.get("email_unsubscribed") or props.get("unsubscribed_email")):
+            blocked = {"type": atype, "channel": channel, "ok": False, "blocked_by_suppression": True,
+                       "note": "用户已退订邮件（email_unsubscribed）"}
+            ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
+                              "subject": "", "text": "", **blocked})
+            return blocked
+
+    if channel in _freq.MARKETING_CHANNELS:
+        gate = await _freq.check(store, ctx, user, channel,
+                                 template_id=loop.get("template_id"),
+                                 force=bool(payload.get("force")))
+        if not gate["ok"]:
+            blocked = {"type": atype, "channel": channel, "ok": False, "blocked_by_frequency": True,
+                       "note": gate["reason"], "frequency": gate.get("counts") or {}}
+            ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
+                              "subject": "", "text": "", **blocked})
+            return blocked
+
+    result = await _execute_action(ctx, action, loop, user)
+    if result.get("ok") and not result.get("dry_run") and channel in _freq.MARKETING_CHANNELS:
+        try:
+            await _freq.record(store, user, channel, atype,
+                               template_id=loop.get("template_id"), loop_id=loop.get("id"))
+        except Exception:  # noqa: BLE001 —— 台账失败不影响投递结果
+            pass
     return result
