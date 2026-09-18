@@ -221,7 +221,9 @@ async def execute_action(
             return blocked
 
     result = await _execute_action(ctx, action, loop, user)
-    if result.get("ok") and not result.get("dry_run") and channel in _freq.MARKETING_CHANNELS:
+    if (result.get("ok") and not result.get("dry_run") and channel in _freq.MARKETING_CHANNELS
+            and not _freq._is_transactional(loop.get("template_id"), _freq.cfg_of(ctx))):
+        # 事务类消息不占营销配额（收据/验证码等）
         try:
             await _freq.record(store, user, channel, atype,
                                template_id=loop.get("template_id"), loop_id=loop.get("id"))

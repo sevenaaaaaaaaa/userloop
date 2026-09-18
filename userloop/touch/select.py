@@ -98,6 +98,7 @@ async def score(store: Store, user: dict, identities: dict[str, str], ctx: Execu
                 individual = min(1.0, 0.4 + 0.2 * hits)
         except Exception:  # noqa: BLE001
             individual = None
+        prior = max(0.0, min(1.0, prior))        # 截断到 [0,1]，避免样本少时超过 1
         base_score = individual if individual is not None else prior
         final = base_score * float(weights.get(ch, 1.0))
         scores.append({"channel": ch, "score": round(final, 4),
