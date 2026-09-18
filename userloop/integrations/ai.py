@@ -30,19 +30,22 @@ def _client(cfg: dict, transport: Any = None) -> httpx.AsyncClient:
 
 
 async def chat(ctx: ExecutorContext, messages: list[dict], model: str | None = None,
-               transport: Any = None, max_tokens: int | None = None) -> dict[str, Any]:
+               transport: Any = None, max_tokens: int | None = None,
+               json_mode: bool = True) -> dict[str, Any]:
     """OpenAI 兼容 chat/completions 调用，返回 {ok, content, model, error}。"""
     cfg = (ctx.config.get("ai") or {})
     key = cfg.get("api_key")
     if not key:
         return {"ok": False, "error": "ai.api_key not configured", "dry_run": True}
-    body = {
+    body: dict[str, Any] = {
         "model": model or cfg.get("model", "deepseek-chat"),
         "messages": messages,
         "temperature": float(cfg.get("temperature", 0.8)),
         "max_tokens": int(max_tokens or cfg.get("max_tokens", 300)),
-        "response_format": {"type": "json_object"},
     }
+    if json_mode:
+        # 仅结构化调用启用（DeepSeek 要求提示中含 "json"，否则 400）
+        body["response_format"] = {"type": "json_object"}
     try:
         async with _client(cfg, transport) as client:
             resp = await client.post("/chat/completions",

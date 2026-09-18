@@ -244,3 +244,44 @@ def test_batch_approve_executes_and_handles_frequency(tmp_path) -> None:
                 await store.close()
 
     asyncio.run(_run())
+
+
+async def test_reporter_builds_with_narrative(tmp_path) -> None:
+    """周报：硬指标 + AI 叙事；LLM 不可用时降级但仍产出可读报告。"""
+    import httpx as _httpx
+
+    from userloop.ai import reporter
+    from userloop.core.store import Store
+
+    store = Store(str(tmp_path / "rp.db"), {})
+    await store.connect()
+    try:
+        u = await store.upsert_user("rp1", email="rp1@x.com")
+        await store.update_user(u["id"], stage="signup")
+        await store.log_block(u["id"], "email", "距上次触达仅 1.0h（全局间隔需 24h）")
+
+        def ok_handler(request: _httpx.Request) -> _httpx.Response:
+            import json as _json
+
+            body = _json.loads(request.read() or b"{}")
+            assert "response_format" not in body, "叙事调用不应强制 JSON 模式"
+            return _httpx.Response(200, json={"choices": [{"message": {"content":
+                "## 本周概览\n注册 1 人。\n## 关键发现\n暂无。\n## 最大漏损\n访客占比过高。\n## 下周建议\n1. 清空待批队列\n2. 上激活引导\n3. 复用 winner 版式"}}]})
+
+        ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t"}})
+        rep = await reporter.build(store, ctx, days=7, transport=_httpx.MockTransport(ok_handler))
+        assert rep["ok"] and rep["degraded"] is False
+        assert "下周建议" in rep["markdown"]
+        assert "用户" in rep["markdown"] and "漏斗" in rep["markdown"]
+        assert rep["stats"]["blocks"]["total"] == 1        # 拦截台账进入报告
+        path = await reporter.save(store, ctx, rep)
+        assert path.endswith(".md") and __import__("os").path.exists(path)
+
+        # LLM 失败 → 降级但报告仍可用
+        def bad_handler(request: _httpx.Request) -> _httpx.Response:
+            return _httpx.Response(400, json={"error": "bad"})
+
+        rep2 = await reporter.build(store, ctx, days=7, transport=_httpx.MockTransport(bad_handler))
+        assert rep2["degraded"] is True and "硬指标附录" in rep2["markdown"]
+    finally:
+        await store.close()
