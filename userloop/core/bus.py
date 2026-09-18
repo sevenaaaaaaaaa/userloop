@@ -58,7 +58,10 @@ async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) ->
         ident_props.setdefault("email", p["email"])
     ident_map = {"email": "email", "phone": "phone", "mobile": "phone",
                  "openid": "wechat_openid", "unionid": "wechat_unionid",
-                 "wecom_userid": "wecom_userid", "visitor_id": "websflow_visitor"}
+                 "wecom_userid": "wecom_userid", "visitor_id": "websflow_visitor",
+                 # 外部系统标识：OpenFlow 会员（member_id）与访客，实现跨系统身份映射
+                 "member_id": "openflow_member", "openflow_member_id": "openflow_member",
+                 "openflow_visitor_id": "openflow_visitor"}
     for key, type_ in ident_map.items():
         val = ident_props.get(key)
         if not val:
