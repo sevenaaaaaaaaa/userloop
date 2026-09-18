@@ -80,6 +80,10 @@
       事件流
     </a>
     <div class="sb-grp">实验与编排</div>
+    <a class="nv" href="#sec-assets" data-sec="sec-assets">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7l8-4 8 4-8 4-8-4Z"/><path d="M4 12l8 4 8-4M4 17l8 4 8-4"/></svg>
+      资产市场
+    </a>
     <a class="nv" href="#sec-eco" data-sec="sec-eco">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7l3 3M17 7l-3 3M7 17l3-3M17 17l-3-3"/></svg>
       生态互联
@@ -262,6 +266,19 @@
       </div>
     </section>
 
+    <section id="sec-assets">
+      <div class="panel">
+        <div class="p-head"><h3>行业资产包（一键应用）</h3>
+          <span class="p-sub">只流转定义、不流转数据；导入幂等可预览</span>
+          <button class="btn ghost sm" onclick="asExport()">导出本租户资产</button></div>
+        <div class="p-body"><table><thead><tr><th>资产包</th><th>行业</th><th>内容</th><th>依赖</th><th>操作</th></tr></thead><tbody id="asPacks"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <div class="p-head"><h3>版本与审批</h3><span class="p-sub">模板变更自动快照 · 可回滚</span></div>
+        <div class="p-body"><table><thead><tr><th>资产</th><th>类型</th><th>版本</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody id="asVersions"></tbody></table></div>
+      </div>
+    </section>
+
     <section id="sec-eco">
       <div class="panels p2">
         <div class="panel">
@@ -337,7 +354,8 @@ function toggleLang(){
   try { localStorage.setItem('ul_lang', next); } catch(e){}
   applyLang();
 evoLoad();
-ecoLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
+ecoLoad();
+asLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
 }
 function applyLang(){
   const dict = UL_I18N[currentLang()] || UL_I18N['zh-CN'];
@@ -541,6 +559,46 @@ function render(r){
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
 }
 
+async function asLoad(){
+  const [r, v] = await Promise.all([j('api/v1/assets/packs'), j('api/v1/assets/versions?limit=15')]);
+  $('asPacks').innerHTML = (r.packs||[]).map(p=>`
+    <tr><td><b>${p.name}</b><div class="mono" style="color:var(--faint)">${p.description||''}</div></td>
+    <td><span class="tag">${p.industry}</span></td>
+    <td class="mono">模板 ${p.counts.loop_templates} · 画布 ${p.counts.canvas_flows} · 实验 ${p.counts.experiments} · 分群 ${p.counts.segments}</td>
+    <td class="mono">${(p.requires||[]).join(',')||'—'}</td>
+    <td><button class="btn ghost sm" onclick="asPreview('${p.id}')">预览</button>
+        <button class="btn primary sm" onclick="asApply('${p.id}')">应用</button></td></tr>`).join('')
+    || '<tr><td colspan="5" style="color:var(--faint)">无资产包</td></tr>';
+  $('asVersions').innerHTML = (v.versions||[]).map(x=>`
+    <tr><td class="mono">${x.asset_id.slice(0,22)}</td><td><span class="tag">${x.asset_type}</span></td>
+    <td class="mono">v${x.version}</td>
+    <td><span class="tag ${x.status==='approved'?'ok':x.status==='rejected'?'danger':'warn'}">${x.status}</span></td>
+    <td style="color:var(--muted)">${x.note||''}</td>
+    <td><button class="btn ghost sm" onclick="asRollback(${x.id})">回滚</button></td></tr>`).join('')
+    || '<tr><td colspan="6" style="color:var(--faint)">暂无版本</td></tr>';
+}
+async function asPreview(id){
+  const r = await (await fetch(`api/v1/assets/packs/${id}/apply`, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({dry_run:true})})).json();
+  toast(`预览：将创建 模板${r.counts.loop_templates} 画布${r.counts.canvas_flows} 实验${r.counts.experiments} 分群${r.counts.segments}`);
+}
+async function asApply(id){
+  const r = await (await fetch(`api/v1/assets/packs/${id}/apply`, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({})})).json();
+  toast(`已应用：创建 ${Object.values(r.counts||{}).reduce((a,b)=>a+b,0)} 项，跳过 ${Object.values(r.skipped||{}).reduce((a,b)=>a+b,0)} 项`);
+  asLoad(); load(true);
+}
+async function asRollback(vid){
+  const r = await (await fetch(`api/v1/assets/versions/${vid}/rollback`, {method:'POST'})).json();
+  toast(r.ok ? `已回滚到 v${r.restored_from_version}` : ('回滚失败：'+(r.error||''))); asLoad();
+}
+async function asExport(){
+  const r = await (await fetch('api/v1/assets/export')).json();
+  const blob = new Blob([JSON.stringify(r, null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `${r.id}.json`; a.click();
+  toast('已导出资产包（仅定义，不含用户数据）');
+}
 async function ecoLoad(){
   try {
     const [ins, pubs] = await Promise.all([j('api/v1/integrations/inflow/insights?limit=10'),
@@ -564,14 +622,17 @@ async function ecoInflowSync(){
   const r = await (await fetch('api/v1/integrations/inflow/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json();
   toast(r.ok ? `拉取 ${r.fetched} 条，新建 ${r.created} 个 Loop 草稿` : ('失败：'+(r.error||'')));
   ecoLoad();
+asLoad();
 }
 async function ecoEnable(id){
   const r = await (await fetch(`api/v1/integrations/inflow/insights/${id}/enable`, {method:'POST'})).json();
-  toast(r.ok ? `已启用 Loop：${r.name}` : '启用失败'); ecoLoad(); load(true);
+  toast(r.ok ? `已启用 Loop：${r.name}` : '启用失败'); ecoLoad();
+asLoad(); load(true);
 }
 async function ecoVerify(){
   const r = await (await fetch('api/v1/content/verify', {method:'POST'})).json();
   toast(`检查完成：验证 ${r.verified} 条`); ecoLoad();
+asLoad();
 }
 let evoData = null;
 async function evoLoad(refresh){
@@ -611,23 +672,27 @@ async function evoPropose(){
   toast(r.ok ? `生成 ${r.count} 条提案` : ('失败：'+(r.error||'')));
   evoLoad();
 ecoLoad();
+asLoad();
 }
 async function evoApply(id){
   const r = await (await fetch(`api/v1/evolve/proposals/${id}/apply`, {method:'POST'})).json();
   toast(r.ok ? (r.kind==='config' ? `已应用 ${r.key}=${r.new_value}（可回滚 ${r.old_value}）` : '已登记为待办') : ('失败：'+(r.error||'')));
   evoLoad();
 ecoLoad();
+asLoad();
 }
 async function evoRollback(id){
   const r = await (await fetch(`api/v1/evolve/proposals/${id}/rollback`, {method:'POST'})).json();
   toast(r.ok ? `已回滚 → ${r.rollback.key}=${r.rollback.restored}` : ('回滚失败：'+(r.error||'')));
   evoLoad();
 ecoLoad();
+asLoad();
 }
 async function evoReject(id){
   await fetch(`api/v1/evolve/proposals/${id}/reject`, {method:'POST'});
   toast('已驳回'); evoLoad();
 ecoLoad();
+asLoad();
 }
 async function sgDraft(){
   const prompt = $('sgPrompt').value.trim();
@@ -788,6 +853,7 @@ prModel();
 applyLang();
 evoLoad();
 ecoLoad();
+asLoad();
 </script>
 </body>
 </html>

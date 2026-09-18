@@ -923,6 +923,116 @@ def create_app(data_dir: str | None = None) -> Any:
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
 
+    # ---- 运营资产市场（N2）----
+
+    @app.get(f"{prefix}/api/v1/assets/packs")
+    async def assets_packs() -> JSONResponse:
+        from userloop.assets import packs as ap
+
+        items = [ap.summarize(p) for p in ap.load_packs(cfg["data_dir"])]
+        imported = await store.list_asset_packs()
+        return JSONResponse({"count": len(items), "packs": items, "imported": imported})
+
+    @app.get(f"{prefix}/api/v1/assets/packs/{{pack_id}}")
+    async def assets_pack_detail(pack_id: str) -> JSONResponse:
+        from userloop.assets import packs as ap
+
+        pack = ap.get_pack(cfg["data_dir"], pack_id)
+        if not pack:
+            raise HTTPException(status_code=404, detail="资产包不存在")
+        return JSONResponse({"pack": pack, "summary": ap.summarize(pack)})
+
+    @app.get(f"{prefix}/api/v1/assets/packs/{{pack_id}}/export")
+    async def assets_pack_export(pack_id: str) -> Any:
+        from fastapi.responses import Response
+
+        from userloop.assets import packs as ap
+
+        pack = ap.get_pack(cfg["data_dir"], pack_id)
+        if not pack:
+            raise HTTPException(status_code=404, detail="资产包不存在")
+        body = json.dumps(pack, ensure_ascii=False, indent=2)
+        return Response(content=body.encode(), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{pack_id}.json"'})
+
+    @app.get(f"{prefix}/api/v1/assets/export")
+    async def assets_export(name: str = "租户资产导出") -> JSONResponse:
+        """导出当前租户的定义类资产（仅定义，不含任何用户数据）。"""
+        from userloop.assets import packs as ap
+
+        return JSONResponse(await ap.export_assets(store, name=name))
+
+    @app.post(f"{prefix}/api/v1/assets/import")
+    async def assets_import(request: Request) -> JSONResponse:
+        """导入资产包（dry_run 预览 / require_approval 停用待批 / prefix 多套共存）。"""
+        from userloop.assets import packs as ap
+
+        try:
+            body = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
+        pack = body.get("pack")
+        if not isinstance(pack, dict) or not pack.get("id"):
+            raise HTTPException(status_code=400, detail="缺少 pack（资产包对象）")
+        default_approval = bool(((cfg.get("assets") or {}).get("require_approval")))
+        return JSONResponse(await ap.import_assets(
+            store, pack, dry_run=bool(body.get("dry_run")),
+            require_approval=bool(body.get("require_approval", default_approval)),
+            prefix=str(body.get("prefix") or "")))
+
+    @app.post(f"{prefix}/api/v1/assets/packs/{{pack_id}}/apply")
+    async def assets_apply(pack_id: str, request: Request) -> JSONResponse:
+        """一键应用内置/自定义资产包到当前租户。"""
+        from userloop.assets import packs as ap
+
+        pack = ap.get_pack(cfg["data_dir"], pack_id)
+        if not pack:
+            raise HTTPException(status_code=404, detail="资产包不存在")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        default_approval = bool(((cfg.get("assets") or {}).get("require_approval")))
+        return JSONResponse(await ap.import_assets(
+            store, pack, dry_run=bool(body.get("dry_run")),
+            require_approval=bool(body.get("require_approval", default_approval)),
+            prefix=str(body.get("prefix") or "")))
+
+    @app.get(f"{prefix}/api/v1/assets/versions")
+    async def assets_versions(asset_type: str | None = None, asset_id: str | None = None,
+                              limit: int = 50) -> JSONResponse:
+        rows = await store.list_asset_versions(asset_type=asset_type, asset_id=asset_id, limit=limit)
+        for r in rows:
+            r.pop("data", None)          # 列表不带全量数据（详情接口有）
+        return JSONResponse({"count": len(rows), "versions": rows})
+
+    @app.get(f"{prefix}/api/v1/assets/versions/{{version_id}}")
+    async def assets_version_detail(version_id: int) -> JSONResponse:
+        ver = await store.get_asset_version(version_id)
+        if not ver:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        return JSONResponse(ver)
+
+    @app.post(f"{prefix}/api/v1/assets/versions/{{version_id}}/rollback")
+    async def assets_rollback(version_id: int) -> JSONResponse:
+        return JSONResponse(await store.restore_asset_version(version_id))
+
+    @app.post(f"{prefix}/api/v1/assets/approve")
+    async def assets_approve(request: Request) -> JSONResponse:
+        """审批：批准导入的资产（启用）或驳回（保持停用）。"""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        asset_type = str(body.get("asset_type") or "loop_template")
+        asset_id = str(body.get("asset_id") or "")
+        approve = bool(body.get("approve", True))
+        if not asset_id:
+            raise HTTPException(status_code=400, detail="缺少 asset_id")
+        await store.set_asset_status(asset_id, asset_type, "approved" if approve else "rejected")
+        return JSONResponse({"ok": True, "asset_id": asset_id, "asset_type": asset_type,
+                             "status": "approved" if approve else "rejected"})
+
     # ---- 生态互联：被外部系统调用（OpenFlow 画布/自动化 → UserLoop Loop）----
 
     @app.post(f"{prefix}/api/v1/loops/trigger")

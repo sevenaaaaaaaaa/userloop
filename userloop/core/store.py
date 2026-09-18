@@ -149,6 +149,24 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS asset_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_type TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_assetver ON asset_versions(asset_type, asset_id, version DESC);
+
+CREATE TABLE IF NOT EXISTS asset_packs (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
@@ -513,13 +531,126 @@ class Store:
 
     # ---- loop templates ----
 
-    async def put_template(self, t: dict) -> None:
+    async def put_template(self, t: dict, snapshot_note: str = "") -> None:
         assert self.db
         await self.db.execute(
             "INSERT INTO loop_templates (id, data) VALUES (?,?) "
             "ON CONFLICT(id) DO UPDATE SET data=excluded.data",
             (t["id"], j(t)),
         )
+        # 每次落库自动快照一个版本（可查看/回滚）
+        await self.snapshot_asset("loop_template", t["id"], t, note=snapshot_note)
+
+    # ---- 资产版本（版本化与回滚）----
+
+    async def snapshot_asset(self, asset_type: str, asset_id: str, data: dict,
+                             status: str = "active", note: str = "") -> int:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT COALESCE(MAX(version),0) v FROM asset_versions WHERE asset_type=? AND asset_id=?",
+            (asset_type, asset_id))
+        row = await cur.fetchone()
+        version = int((row or {"v": 0})["v"]) + 1
+        await self.db.execute(
+            "INSERT INTO asset_versions (asset_type, asset_id, version, data, status, note, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (asset_type, asset_id, version, j(data), status, note[:200], iso_now()))
+        return version
+
+    async def list_asset_versions(self, asset_type: str | None = None, asset_id: str | None = None,
+                                  limit: int = 50) -> list[dict]:
+        assert self.db
+        sql = "SELECT * FROM asset_versions WHERE 1=1"
+        args: list[Any] = []
+        if asset_type:
+            sql += " AND asset_type=?"
+            args.append(asset_type)
+        if asset_id:
+            sql += " AND asset_id=?"
+            args.append(asset_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        cur = await self.db.execute(sql, args)
+        out = []
+        for r in await cur.fetchall():
+            d = dict(r)
+            d["data"] = pj(d.get("data"), {}) or {}
+            out.append(d)
+        return out
+
+    async def get_asset_version(self, version_id: int) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM asset_versions WHERE id=?", (version_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["data"] = pj(d.get("data"), {}) or {}
+        return d
+
+    async def restore_asset_version(self, version_id: int) -> dict:
+        """回滚：用某个历史版本覆盖当前定义（并生成新版本，保留审计链）。"""
+        ver = await self.get_asset_version(version_id)
+        if not ver:
+            return {"ok": False, "error": "版本不存在"}
+        data = dict(ver["data"])
+        kind = ver["asset_type"]
+        if kind == "loop_template":
+            await self.put_template(data, snapshot_note=f"rollback<-v{ver['version']}")
+        elif kind == "canvas_flow":
+            await self.put_canvas(data)
+            await self.snapshot_asset("canvas_flow", data["id"], data, note=f"rollback<-v{ver['version']}")
+        elif kind == "experiment":
+            await self.put_experiment(data)
+            await self.snapshot_asset("experiment", data["id"], data, note=f"rollback<-v{ver['version']}")
+        else:
+            return {"ok": False, "error": f"不支持的类型：{kind}"}
+        return {"ok": True, "asset_type": kind, "asset_id": ver["asset_id"],
+                "restored_from_version": ver["version"], "data": data}
+
+    async def set_asset_status(self, asset_id: str, asset_type: str, status: str) -> None:
+        """审批：把某资产的最新版本标记为 approved（并启用资产）。"""
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT id FROM asset_versions WHERE asset_type=? AND asset_id=? ORDER BY version DESC LIMIT 1",
+            (asset_type, asset_id))
+        row = await cur.fetchone()
+        if not row:
+            return
+        await self.db.execute("UPDATE asset_versions SET status=? WHERE id=?", (status, row["id"]))
+        # 同步启用/停用资产本体
+        if asset_type == "loop_template":
+            tpls = await self.get_templates(enabled_only=False)
+            tpl = next((t for t in tpls if t["id"] == asset_id), None)
+            if tpl:
+                await self.put_template({**tpl, "enabled": status == "approved"}, snapshot_note="approval")
+        elif asset_type == "canvas_flow":
+            flow = await self.get_canvas(asset_id)
+            if flow:
+                await self.put_canvas({**flow, "enabled": status == "approved"})
+        elif asset_type == "experiment":
+            exp = await self.get_experiment(asset_id)
+            if exp:
+                await self.put_experiment({**exp, "enabled": status == "approved"})
+
+    # ---- 资产包（导入记录）----
+
+    async def put_asset_pack(self, pack: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO asset_packs (id, data, imported_at) VALUES (?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET data=excluded.data, imported_at=excluded.imported_at",
+            (pack["id"], j(pack), iso_now()))
+
+    async def list_asset_packs(self) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute("SELECT data, imported_at FROM asset_packs ORDER BY imported_at DESC")
+        out = []
+        for r in await cur.fetchall():
+            d = pj(r["data"], {}) or {}
+            d["imported_at"] = r["imported_at"]
+            out.append(d)
+        return out
 
     async def get_templates(self, enabled_only: bool = True) -> list[dict]:
         assert self.db
