@@ -185,6 +185,8 @@ async def execute_action(
         except json.JSONDecodeError:
             payload = {}
     channel = _freq.channel_of(atype)
+    # touch.auto：渠道由 Next Best Channel 在 dispatch 内解析，此处不做前置门禁（避免按 auto 误判）
+    is_auto = atype == "touch.auto"
     store = getattr(ctx, "store", None)
 
     # 硬规则优先于频控：退订/停用（原因更准确，避免把"已退订"说成"频控"）
@@ -209,7 +211,7 @@ async def execute_action(
                               "subject": "", "text": "", **blocked})
             return blocked
 
-    if channel in _freq.MARKETING_CHANNELS:
+    if channel in _freq.MARKETING_CHANNELS and not is_auto:
         gate = await _freq.check(store, ctx, user, channel,
                                  template_id=loop.get("template_id"),
                                  force=bool(payload.get("force")))
@@ -221,11 +223,12 @@ async def execute_action(
             return blocked
 
     result = await _execute_action(ctx, action, loop, user)
-    if (result.get("ok") and not result.get("dry_run") and channel in _freq.MARKETING_CHANNELS
+    rec_channel = str(result.get("channel") or channel)     # auto → 用解析后的真实渠道记账
+    if (result.get("ok") and not result.get("dry_run") and rec_channel in _freq.MARKETING_CHANNELS
             and not _freq._is_transactional(loop.get("template_id"), _freq.cfg_of(ctx))):
         # 事务类消息不占营销配额（收据/验证码等）
         try:
-            await _freq.record(store, user, channel, atype,
+            await _freq.record(store, user, rec_channel, atype,
                                template_id=loop.get("template_id"), loop_id=loop.get("id"))
         except Exception:  # noqa: BLE001 —— 台账失败不影响投递结果
             pass
