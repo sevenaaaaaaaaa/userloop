@@ -205,3 +205,13 @@ OpenFlow 与 WebsFlow 都用 `visitor_id` 这个词，但含义完全不同（Op
 必须在**首屏渲染完成、页面有了真实高度之后**再注册观察器（并留一个超时兜底），
 观察器才会真正按滚动位置触发。
 
+## L26 内联 onclick 的参数要用 jsArg，不能只靠 HTML 转义
+
+把用户数据塞进 `onclick="fn('${value}')"` 时，只做 HTML 转义（`&quot;`）挡不住**单引号越界**：
+`value = "');alert(1)//"` 会闭合字符串并注入代码。正确做法是
+`jsArg(v) = esc(JSON.stringify(String(v)))` → 生成 `onclick="fn(&quot;...&quot;)"`，
+浏览器解析后是 `fn("...")`，引号/反斜杠/换行都由 JSON 序列化兜住。
+另：数值参数用 `Number(x)||0` 明确化，既安全又便于静态检查。
+规则简单——**渲染转义看上下文**：HTML 文本用 `esc`，HTML 属性里的 JS 字面量用 `jsArg`，
+URL 用 `encodeURIComponent`，toast 用 `textContent`。
+

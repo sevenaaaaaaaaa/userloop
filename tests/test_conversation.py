@@ -31,7 +31,8 @@ def _ctx(tmp_path, cfg=None):
 
 async def test_inbound_ai_reply_and_identity(store: Store, tmp_path) -> None:
     """入站消息 → AI 回复 → 出站（webhook 渠道）；手机号自动进身份图谱。"""
-    ctx = _ctx(tmp_path, {"touch": {"conversation": {"enabled": True, "brand": "测试品牌"}}})
+    ctx = _ctx(tmp_path, {"touch": {"conversation": {"enabled": True, "brand": "测试品牌"},
+                                    "frequency": {"quiet_hours": []}}})
     ctx.store = store
     sent = {}
 
