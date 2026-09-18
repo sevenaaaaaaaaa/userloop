@@ -30,7 +30,7 @@ def _client(cfg: dict, transport: Any = None) -> httpx.AsyncClient:
 
 
 async def chat(ctx: ExecutorContext, messages: list[dict], model: str | None = None,
-               transport: Any = None) -> dict[str, Any]:
+               transport: Any = None, max_tokens: int | None = None) -> dict[str, Any]:
     """OpenAI 兼容 chat/completions 调用，返回 {ok, content, model, error}。"""
     cfg = (ctx.config.get("ai") or {})
     key = cfg.get("api_key")
@@ -40,7 +40,7 @@ async def chat(ctx: ExecutorContext, messages: list[dict], model: str | None = N
         "model": model or cfg.get("model", "deepseek-chat"),
         "messages": messages,
         "temperature": float(cfg.get("temperature", 0.8)),
-        "max_tokens": int(cfg.get("max_tokens", 300)),
+        "max_tokens": int(max_tokens or cfg.get("max_tokens", 300)),
         "response_format": {"type": "json_object"},
     }
     try:

@@ -179,3 +179,13 @@ async def test_copilot_apply_as_draft(store: Store) -> None:
     assert any(t["id"] == out["id"] and t["enabled"] is False for t in saved)
     # 未启用 → 不参与匹配
     assert not any(t["id"] == out["id"] for t in await store.get_templates(enabled_only=True))
+
+
+def test_copilot_json_lenient_parse() -> None:
+    from userloop.ai.copilot import _loads_lenient
+
+    assert _loads_lenient('{"a":1}') == {"a": 1}
+    assert _loads_lenient('```json\n{"a":2}\n```') == {"a": 2}
+    assert _loads_lenient('好的，这是结果：{"a":3} 希望有帮助') == {"a": 3}
+    assert _loads_lenient('not json at all') is None
+    assert _loads_lenient('') is None

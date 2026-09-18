@@ -56,6 +56,24 @@ SYSTEM = """你是 UserLoop 的运营编排 Copilot。把用户的自然语言�
 5. goal_event 要能反映业务目标（如 activation / purchase / h5_click / referral）。"""
 
 
+def _loads_lenient(content: str) -> dict | None:
+    """容错解析：去 markdown 围栏、截取首尾大括号之间的 JSON（应对截断/多话）。"""
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        text = text.split("\n", 1)[1] if "\n" in text else text
+    for candidate in (text, text[text.find("{"): text.rfind("}") + 1] if "{" in text and "}" in text else ""):
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def _clamp(v: Any, lo: int, hi: int, default: int) -> int:
     try:
         n = int(v)
@@ -128,12 +146,12 @@ async def draft_loop(ctx: ExecutorContext, prompt: str, transport: Any = None) -
 
     msgs = [{"role": "system", "content": SYSTEM},
             {"role": "user", "content": f"需求：{prompt}"}]
-    res = await chat(ctx, msgs, transport=transport)
+    # 流程 JSON 较长：给足输出预算，避免被截断成非法 JSON
+    res = await chat(ctx, msgs, transport=transport, max_tokens=1200)
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error") or "AI 不可用", "degraded": True}
-    try:
-        raw = json.loads(res.get("content") or "{}")
-    except json.JSONDecodeError:
+    raw = _loads_lenient(res.get("content") or "")
+    if raw is None:
         return {"ok": False, "error": "AI 输出不是合法 JSON（可重试或换更明确的描述）"}
     draft, warnings = validate(raw)
     return {"ok": True, "draft": draft, "warnings": warnings, "model": res.get("model")}
