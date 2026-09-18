@@ -100,7 +100,7 @@ main{margin-left:calc(var(--sb-w) + 28px);max-width:var(--main-max)}
 .kpi .k-sub{font-size:var(--fs-md);color:var(--muted)}
 
 /* ── 面板 ── */
-.panels{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;margin-bottom:16px}
+.panels{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;margin-bottom:16px;align-items:start}
 .panels.p2{grid-template-columns:1fr 1fr}
 .panels.p3{grid-template-columns:1fr 1fr 1fr}
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);backdrop-filter:blur(10px);overflow:hidden;display:flex;flex-direction:column}
@@ -112,9 +112,18 @@ main{margin-left:calc(var(--sb-w) + 28px);max-width:var(--main-max)}
 /* ── 表格 ── */
 table{width:100%;border-collapse:collapse;font-size:var(--fs-lg)}
 table th{text-align:left;padding:10px 14px;font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:600;letter-spacing:.07em;color:var(--faint);border-bottom:1px solid var(--border-strong);white-space:nowrap}
-table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;white-space:nowrap}
 table tr:hover td{background:var(--hover)}
 table tr:last-child td{border-bottom:none}
+/* 短字段不换行（默认），长文本列加 .wrap；含 JSON/长标识的列允许任意断行 */
+table td.wrap{white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:140px}
+table td.wrap .mono{white-space:normal;overflow-wrap:anywhere}
+table td.ellip{max-width:190px;overflow:hidden;text-overflow:ellipsis}
+/* 长文本折叠（悬停 title 看全文） */
+.clamp2,.clamp3{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:anywhere}
+.clamp2{-webkit-line-clamp:2}.clamp3{-webkit-line-clamp:3}
+/* 单元格内的小标题/次级说明 */
+td .cellsub{font-size:var(--fs-sm);color:var(--faint);margin-top:2px}
 
 /* ── 按钮 / 徽标 ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:40px;padding:0 18px;border-radius:13px;font-size:var(--fs-lg);font-weight:650;border:1px solid transparent;cursor:pointer;transition:transform .2s,box-shadow .25s,background .2s;white-space:nowrap}
@@ -192,11 +201,32 @@ select.inp:focus,input.inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
 /* ── 响应式 ── */
-@media(max-width:1100px){.panels,.panels.p2,.panels.p3{grid-template-columns:1fr}}
+@media(max-width:1100px){
+  .panels,.panels.p2,.panels.p3{grid-template-columns:1fr}
+}
+/* 中屏：隐藏中间搜索框，顶栏改为两端自适应两列（避免三列塌陷重叠） */
 @media(max-width:840px){
+  #chrome .bar{grid-template-columns:minmax(0,1fr) auto;gap:10px}
+  #chrome .bar-center{display:none}
+  #chrome .bar-start{min-width:0;overflow:hidden}
+  #chrome .bar-end{min-width:0}
   #sidebar{transform:translateX(-110%)}
   #sidebar.open{transform:translateX(0)}
   main{margin-left:0}
   #app{padding:10px}
+  .page-head{padding-bottom:12px}
 }
-@media(max-width:640px){#chrome .bar-center{display:none}}
+/* 窄屏：精简品牌副标题与非关键状态，收紧 chip 尺寸 */
+@media(max-width:640px){
+  #chrome .brand .bn-sub{display:none}
+  #chrome .bar-end{gap:6px}
+  #chrome .bar-end .chip{height:32px;padding:0 10px}
+  #chrome .bar-end .chip .nm{display:none}
+  .page-head h1{font-size:var(--fs-2xl)}
+  .page-head .sub{display:none}
+  .kpi .k-val{font-size:24px}
+}
+@media(max-width:460px){
+  #chrome .bar-end .hide-xs{display:none}
+  #chrome{height:52px}
+}
