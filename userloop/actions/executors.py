@@ -209,12 +209,22 @@ async def execute_action(
                        "note": "用户已退订短信（sms_unsubscribed）"}
             ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
                               "subject": "", "text": "", **blocked})
+            if store is not None:
+                try:
+                    await store.log_block(user.get("id", ""), channel, "已退订短信")
+                except Exception:  # noqa: BLE001
+                    pass
             return blocked
         if channel == "email" and (props.get("email_unsubscribed") or props.get("unsubscribed_email")):
             blocked = {"type": atype, "channel": channel, "ok": False, "blocked_by_suppression": True,
                        "note": "用户已退订邮件（email_unsubscribed）"}
             ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
                               "subject": "", "text": "", **blocked})
+            if store is not None:
+                try:
+                    await store.log_block(user.get("id", ""), channel, "已退订邮件")
+                except Exception:  # noqa: BLE001
+                    pass
             return blocked
 
     if channel in _freq.MARKETING_CHANNELS and not is_auto:
