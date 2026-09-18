@@ -152,7 +152,10 @@ async def build(store: Store, ctx: ExecutorContext, days: int | None = None,
     try:
         from userloop.integrations.ai import chat
 
-        res = await chat(ctx, [{"role": "system", "content": SYSTEM},
+        from userloop.i18n import t as _t
+
+        lang = _t("ai.language", ctx.config.get("locale") or "zh-CN")
+        res = await chat(ctx, [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
                                {"role": "user", "content": _stats_brief(stats)}],
                          transport=transport, max_tokens=900, json_mode=False)
         if res.get("ok"):

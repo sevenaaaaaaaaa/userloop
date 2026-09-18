@@ -70,7 +70,10 @@ def _clamp_rules(raw: dict) -> tuple[dict, list[str]]:
 async def draft(ctx: ExecutorContext, prompt: str, transport: Any = None) -> dict[str, Any]:
     from userloop.integrations.ai import chat
 
-    res = await chat(ctx, [{"role": "system", "content": SYSTEM},
+    from userloop.i18n import t as _t
+
+    lang = _t("ai.language", ctx.config.get("locale") or "zh-CN")
+    res = await chat(ctx, [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
                            {"role": "user", "content": f"需求：{prompt}"}],
                      transport=transport, max_tokens=600)
     if not res.get("ok"):

@@ -144,7 +144,10 @@ async def draft_loop(ctx: ExecutorContext, prompt: str, transport: Any = None) -
     """自然语言 → Loop 草稿（LLM + 强校验）。"""
     from userloop.integrations.ai import chat
 
-    msgs = [{"role": "system", "content": SYSTEM},
+    from userloop.i18n import t as _t
+
+    lang = _t("ai.language", ctx.config.get("locale") or "zh-CN")
+    msgs = [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
             {"role": "user", "content": f"需求：{prompt}"}]
     # 流程 JSON 较长：给足输出预算，避免被截断成非法 JSON
     res = await chat(ctx, msgs, transport=transport, max_tokens=1200)

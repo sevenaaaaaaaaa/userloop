@@ -185,30 +185,81 @@ async def run_ai_brain(store: Store, ctx: ExecutorContext) -> list[dict]:
     return await brain_mod.run_batch(store, ctx, limit=limit)
 
 
+async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
+    """按租户遍历执行调度任务（每租户独立数据，互不影响；单租户失败不阻塞其他）。"""
+    from userloop.core.tenants import DEFAULT_TENANT, TenantStores, tenant_config
+
+    out: dict[str, Any] = {}
+    try:
+        tenants = TenantStores(ctx.config)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+    for rec in tenants.registry.list():
+        tid = rec["id"]
+        if not rec.get("enabled", True):
+            continue
+        try:
+            st = await tenants.get(tid)
+            tcfg = tenant_config(ctx.config, rec)
+            tctx = ExecutorContext(tcfg["data_dir"], tcfg)
+            tctx.store = st
+            if job == "actions":
+                r = await process_due_actions(st, tctx)
+                out[tid] = {"actions": len(r)}
+            elif job == "canvas":
+                out[tid] = {"resumed": len(await resume_canvas_waits(st, tctx))}
+            elif job == "inactivity":
+                out[tid] = {"loops": len(await sweep_inactivity(st))}
+            elif job == "verify":
+                out[tid] = {"feedbacks": len(await verify_due_loops(st))}
+            elif job == "prune":
+                out[tid] = await prune_data(st)
+            elif job == "ai":
+                out[tid] = {"decisions": len(await run_ai_brain(st, tctx))}
+            elif job == "predict":
+                from userloop.predict import engine as predict
+
+                pc = tcfg.get("predict") or {}
+                out[tid] = {"computed": await predict.run_batch(
+                    st, limit=int(pc.get("batch_size") or 50),
+                    tz_offset=int(tcfg.get("timezone_offset") or 8), data_dir=tcfg.get("data_dir"))}
+            elif job == "train":
+                from userloop.predict import model as mdl
+
+                out[tid] = {k: await mdl.train(st, tcfg["data_dir"], k) for k in ("churn", "propensity")}
+            elif job == "report":
+                out[tid] = await weekly_report(st, tctx)
+        except Exception as exc:  # noqa: BLE001
+            out[tid] = {"error": str(exc)[:160]}
+    await tenants.close_all()
+    return out
+
+
 def build_scheduler(store: Store, ctx: ExecutorContext):
     """APScheduler 常驻编排（server 模式使用）。"""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     sched = AsyncIOScheduler(timezone="UTC")
-    sched.add_job(process_due_actions, "interval", seconds=30, args=[store, ctx], id="actions",
+    # 全部任务按租户遍历（多租户隔离；单租户异常不影响其他）
+    sched.add_job(run_all_tenants, "interval", seconds=30, args=[ctx, "actions"], id="actions",
                   max_instances=1, coalesce=True)
-    sched.add_job(sweep_inactivity, "interval", minutes=30, args=[store], id="inactivity",
+    sched.add_job(run_all_tenants, "interval", minutes=30, args=[ctx, "inactivity"], id="inactivity",
                   max_instances=1, coalesce=True)
-    sched.add_job(verify_due_loops, "interval", minutes=5, args=[store], id="verify",
+    sched.add_job(run_all_tenants, "interval", minutes=5, args=[ctx, "verify"], id="verify",
                   max_instances=1, coalesce=True)
-    sched.add_job(resume_canvas_waits, "interval", seconds=30, args=[store, ctx], id="canvas_waits",
+    sched.add_job(run_all_tenants, "interval", seconds=30, args=[ctx, "canvas"], id="canvas_waits",
                   max_instances=1, coalesce=True)
-    sched.add_job(prune_data, "interval", hours=6, args=[store], id="prune",
+    sched.add_job(run_all_tenants, "interval", hours=6, args=[ctx, "prune"], id="prune",
                   max_instances=1, coalesce=True)
-    sched.add_job(run_ai_brain, "interval", minutes=30, args=[store, ctx], id="ai_brain",
+    sched.add_job(run_all_tenants, "interval", minutes=30, args=[ctx, "ai"], id="ai_brain",
                   max_instances=1, coalesce=True)
-    sched.add_job(recompute_predictions, "interval", minutes=60, args=[store, ctx],
-                  id="predictions", max_instances=1, coalesce=True)
-    sched.add_job(train_predict_models, "interval", hours=24, args=[store, ctx],
-                  id="train_models", max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, "interval", minutes=60, args=[ctx, "predict"], id="predictions",
+                  max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, "interval", hours=24, args=[ctx, "train"], id="train_models",
+                  max_instances=1, coalesce=True)
     # 每周一 09:00（CST = UTC 01:00）生成运营周报
     from apscheduler.triggers.cron import CronTrigger
 
-    sched.add_job(weekly_report, CronTrigger(day_of_week="mon", hour=1, minute=0, timezone="UTC"),
-                  args=[store, ctx], id="weekly_report", max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, CronTrigger(day_of_week="mon", hour=1, minute=0, timezone="UTC"),
+                  args=[ctx, "report"], id="weekly_report", max_instances=1, coalesce=True)
     return sched

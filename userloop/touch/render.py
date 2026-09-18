@@ -29,7 +29,7 @@ EMAIL_SHELL = """<!DOCTYPE html>
     <tr><td style="padding:8px 28px 24px;font-size:13px;line-height:1.7;color:#6b7280;">{signature}</td></tr>
     <tr><td style="padding:16px 28px;background:#f9fafb;font-size:12px;color:#9ca3af;line-height:1.7;">
       {footer}<br>
-      <a href="{unsub_url}" style="color:#9ca3af;text-decoration:underline;">不想再收到此类邮件？点此退订</a>
+      <a href="{unsub_url}" style="color:#9ca3af;text-decoration:underline;">{unsub_label}</a>
     </td></tr>
   </table>
 </td></tr></table>
@@ -48,7 +48,10 @@ def _paragraphs(text: str) -> str:
 
 
 def render_email(spec: TouchSpec, user: dict, cfg: dict) -> dict[str, str]:
-    """渲染 HTML 邮件：返回 {subject, html, text}。自动注入追踪与退订。"""
+    """渲染 HTML 邮件：返回 {subject, html, text}。自动注入追踪与退订（按语言本地化）。"""
+    from userloop.i18n import resolve_locale, t
+
+    locale = resolve_locale(None, user, cfg)
     touch_cfg = cfg.get("touch") or {}
     secret = str(touch_cfg.get("track_secret") or cfg.get("api_token") or "userloop")
     base = str(touch_cfg.get("public_base") or "https://nownexts.com/userloop").rstrip("/")
@@ -66,14 +69,16 @@ def render_email(spec: TouchSpec, user: dict, cfg: dict) -> dict[str, str]:
     else:
         cta_url = open_url  # 无 CTA 时按钮指向追踪（避免死链）
 
-    cta_row = CTA_ROW.format(cta_url=cta_url, cta_text=html.escape(spec.cta_text)) if spec.cta_text else ""
+    cta_text_plain = spec.cta_text or t("email.cta_default", locale)
+    cta_row = CTA_ROW.format(cta_url=cta_url, cta_text=html.escape(cta_text_plain)) if cta_text_plain else ""
     body_html = _paragraphs(spec.body)
     heading = html.escape(spec.title or brand)
 
     html_out = EMAIL_SHELL.format(
         title=html.escape(spec.title or brand), brand=html.escape(brand), heading=heading,
         body=body_html, cta_row=cta_row, signature=html.escape(signature) if signature else "",
-        footer=html.escape(str(touch_cfg.get("footer") or "你收到这封邮件是因为你曾注册或订阅我们的服务。")),
+        footer=html.escape(str(touch_cfg.get("footer") or t("email.footer", locale))),
+        unsub_label=html.escape(t("email.unsubscribe", locale)),
         unsub_url=unsub_url, open_pixel=f'<img src="{open_url}" width="1" height="1" alt="" style="display:block;border:0;">',
     )
     text = f"{spec.title}\n\n{spec.body}\n\n{spec.cta_text}: {cta_url}\n\n退订: {unsub_url}"
@@ -92,12 +97,15 @@ def render_h5(spec: TouchSpec, cfg: dict, content: dict[str, Any] | None = None)
 
     content 由 userloop.touch.personalize.builtin_content() 产出（服务端已判定维度）。
     """
+    from userloop.i18n import resolve_locale, t
+
     c = content or {}
+    locale = c.get("locale") or resolve_locale(None, None, cfg)
     title = html.escape(c.get("title") or spec.title or "详情")
     body = _paragraphs(c.get("body") or spec.body)
     badge = c.get("badge") or ""
     subtitle = c.get("subtitle") or ""
-    cta_text = html.escape(spec.cta_text or "查看详情")
+    cta_text = html.escape(spec.cta_text or t("email.cta_default", locale))
     cta_url = html.escape(spec.cta_url or "#")
     device = c.get("device") or "desktop"
     dwell = c.get("dwell") or {}
@@ -105,20 +113,23 @@ def render_h5(spec: TouchSpec, cfg: dict, content: dict[str, Any] | None = None)
     lead_form = (
         '<form id="ul-lead" style="margin-top:22px;padding:16px;border:1px solid #e5e7eb;border-radius:12px;">'
         '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">'
-        + html.escape(lead.get("title") or "留下联系方式，获取专属方案") + '</div>'
-        '<input id="ul-lead-email" type="email" placeholder="邮箱（可选）" '
+        + html.escape(lead.get("title") or t("h5.lead_title", locale)) + '</div>'
+        '<input id="ul-lead-email" type="email" placeholder="' + html.escape(t("h5.lead_email", locale)) + '" '
         'style="width:100%;height:42px;padding:0 12px;border:1px solid #d1d5db;border-radius:10px;margin-bottom:8px;">'
-        '<input id="ul-lead-phone" type="tel" placeholder="手机号（可选）" '
+        '<input id="ul-lead-phone" type="tel" placeholder="' + html.escape(t("h5.lead_phone", locale)) + '" '
         'style="width:100%;height:42px;padding:0 12px;border:1px solid #d1d5db;border-radius:10px;margin-bottom:10px;">'
         '<button type="submit" style="width:100%;height:42px;border:0;border-radius:10px;background:#111827;color:#fff;'
-        'font-size:15px;font-weight:600;cursor:pointer;">提交</button>'
-        '<div id="ul-lead-ok" style="display:none;color:#16a34a;font-size:13px;margin-top:8px;">✓ 已收到，我们会尽快联系你</div>'
+        'font-size:15px;font-weight:600;cursor:pointer;">' + html.escape(t("h5.lead_submit", locale)) + '</button>'
+        '<div id="ul-lead-ok" style="display:none;color:#16a34a;font-size:13px;margin-top:8px;">✓ '
+        + html.escape(t("h5.lead_ok", locale)) + '</div>'
         '</form>') if lead.get("enabled") else ""
     lead_endpoint = html.escape(str(lead.get("endpoint") or ""))
     lead_token_json = json.dumps(str(lead.get("token") or ""))
     secs = int(dwell.get("seconds") or 0)
     alt_text = html.escape(dwell.get("alt_cta_text") or "")
-    alt_note = html.escape(dwell.get("alt_note") or "")
+    alt_note = html.escape(dwell.get("alt_note") or t("h5.dwell_note", locale))
+    if not dwell.get("alt_cta_text"):
+        alt_text = html.escape(t("h5.dwell_cta", locale))
 
     badge_html = (f'<div style="display:inline-block;padding:4px 12px;border-radius:999px;background:#eef2ff;'
                   f'color:#4338ca;font-size:13px;font-weight:600;margin-bottom:14px;">{html.escape(badge)}</div>'
