@@ -112,13 +112,14 @@ main{margin-left:calc(var(--sb-w) + 28px);max-width:var(--main-max)}
 /* ── 表格 ── */
 table{width:100%;border-collapse:collapse;font-size:var(--fs-lg)}
 table th{text-align:left;padding:10px 14px;font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:600;letter-spacing:.07em;color:var(--faint);border-bottom:1px solid var(--border-strong);white-space:nowrap}
-table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;white-space:nowrap}
+table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top}
 table tr:hover td{background:var(--hover)}
 table tr:last-child td{border-bottom:none}
-/* 短字段不换行（默认），长文本列加 .wrap；含 JSON/长标识的列允许任意断行 */
+/* 短字段（阶段/状态/时间等）不换行；长文本列默认换行，加 .wrap 允许任意断行 */
+table td.nw{white-space:nowrap}
 table td.wrap{white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:140px}
 table td.wrap .mono{white-space:normal;overflow-wrap:anywhere}
-table td.ellip{max-width:190px;overflow:hidden;text-overflow:ellipsis}
+table td.ellip{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 长文本折叠（悬停 title 看全文） */
 .clamp2,.clamp3{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:anywhere}
 .clamp2{-webkit-line-clamp:2}.clamp3{-webkit-line-clamp:3}
