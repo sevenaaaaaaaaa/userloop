@@ -1,0 +1,17 @@
+{
+  "email.footer": "你收到这封邮件是因为你曾注册或订阅我们的服务。",
+  "email.unsubscribe": "不想再收到此类邮件？点此退订",
+  "email.cta_default": "查看详情",
+  "h5.lead_title": "留下联系方式，获取专属方案",
+  "h5.lead_email": "邮箱（可选）",
+  "h5.lead_phone": "手机号（可选）",
+  "h5.lead_submit": "提交",
+  "h5.lead_ok": "✓ 已收到，我们会尽快联系你",
+  "h5.dwell_note": "别走开，权益还在这里等你",
+  "h5.dwell_cta": "现在立即领取",
+  "unsub.title": "邮件退订",
+  "unsub.ok": "已为你退订，将不再收到此类邮件。",
+  "unsub.bad": "链接已失效或签名无效，如需退订请联系客服。",
+  "ai.language": "请用简体中文输出。",
+  "segment.fallback": "付费用户"
+}

@@ -26,6 +26,7 @@ from userloop.core.scheduler import (
     verify_due_loops,
 )
 from userloop.core.store import Store, iso_now, pj
+from userloop.core.tenants import DEFAULT_TENANT, StoreProxy, TenantStores, set_current_store
 from userloop.core.throttle import Throttle
 from userloop.touch.base import TouchSpec
 from userloop.server.auth import COOKIE_NAME, Sessions, auth_enabled, sid_from_cookie, verify_user
@@ -40,9 +41,9 @@ def create_app(data_dir: str | None = None) -> Any:
                   "/api/v1/hub/ingest", "/api/login", "/api/logout", "/api/auth/me"}
 
     cfg = load_config(data_dir)
-    store = Store(cfg["db_path"], cfg)
+    tenants = TenantStores(cfg)          # 租户注册表 + Store 缓存
+    store = StoreProxy()                 # 请求级代理：自动路由当前租户的 Store
     ctx = ExecutorContext(cfg["data_dir"], cfg)
-    ctx.store = store          # 频控台账/回执/硬规则依赖（所有链路统一）
     sessions = Sessions()
     throttle = Throttle()
     authed_mode = auth_enabled(cfg["data_dir"])
@@ -61,6 +62,28 @@ def create_app(data_dir: str | None = None) -> Any:
 
     def _user(request: Request) -> dict | None:
         return sessions.get(_sid(request)) if authed_mode else {"username": "local", "role": "admin"}
+
+    @app.middleware("http")
+    async def _tenant_ctx(request: Request, call_next: Any) -> Any:
+        """解析当前租户并注入其 Store（越权：只能访问自己可见的租户）。"""
+        user = sessions.get(_sid(request)) if authed_mode else {"username": "local", "role": "admin",
+                                                                "tenants": [DEFAULT_TENANT]}
+        allowed = set((user or {}).get("tenants") or [DEFAULT_TENANT])
+        wanted = (request.headers.get("X-Tenant")
+                  or request.query_params.get("tenant")
+                  or (user or {}).get("tenant")
+                  or DEFAULT_TENANT)
+        tenant_id = wanted if wanted in allowed or (user or {}).get("role") == "admin" else DEFAULT_TENANT
+        try:
+            store = await tenants.get(tenant_id)
+        except KeyError:
+            store = await tenants.get(DEFAULT_TENANT)
+            tenant_id = DEFAULT_TENANT
+        set_current_store(store, tenant_id)
+        ctx.store = store
+        response = await call_next(request)
+        response.headers.setdefault("X-UserLoop-Tenant", tenant_id)
+        return response
 
     @app.middleware("http")
     async def _gate(request: Request, call_next: Any) -> Any:
@@ -90,13 +113,15 @@ def create_app(data_dir: str | None = None) -> Any:
 
     @app.on_event("startup")
     async def _startup() -> None:
-        await store.connect()
+        default_store = await tenants.get(DEFAULT_TENANT)
+        set_current_store(default_store, DEFAULT_TENANT)
+        ctx.store = default_store
         from userloop.core.templates import seed_canvas, seed_templates
         from userloop.experiments.engine import seed_experiments
 
-        await seed_templates(store, cfg["data_dir"])
-        await seed_canvas(store, cfg["data_dir"])
-        await seed_experiments(store, cfg["data_dir"])
+        await seed_templates(default_store, cfg["data_dir"])
+        await seed_canvas(default_store, cfg["data_dir"])
+        await seed_experiments(default_store, cfg["data_dir"])
         sched = build_scheduler(store, ctx)
         sched.start()
         state["sched"] = sched
@@ -105,7 +130,7 @@ def create_app(data_dir: str | None = None) -> Any:
     async def _shutdown() -> None:
         if state["sched"]:
             state["sched"].shutdown()
-        await store.close()
+        await tenants.close_all()
 
     state = {"store": store, "ctx": ctx, "cfg": cfg, "sched": None}
 
@@ -120,8 +145,11 @@ def create_app(data_dir: str | None = None) -> Any:
         user = verify_user(cfg["data_dir"], str(body.get("username", "")).strip(), str(body.get("password", "")))
         if not user:
             return JSONResponse({"ok": False, "error": "用户名或密码错误"}, status_code=403)
+        user = {**user, "tenants": user.get("tenants") or [DEFAULT_TENANT],
+                "tenant": user.get("tenant") or DEFAULT_TENANT}
         sid = sessions.create(user)
-        resp = JSONResponse({"ok": True, "name": user["name"], "role": user["role"]})
+        resp = JSONResponse({"ok": True, "name": user["name"], "role": user["role"],
+                             "tenants": user["tenants"], "tenant": user["tenant"]})
         resp.set_cookie(COOKIE_NAME, sid, httponly=True, samesite="lax", path=prefix or "/")
         return resp
 
@@ -137,7 +165,9 @@ def create_app(data_dir: str | None = None) -> Any:
         user = _user(request)
         if not user:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(user)
+        from userloop.core.tenants import current_tenant
+
+        return JSONResponse({**user, "current_tenant": current_tenant()})
 
     # ---- ingest ----
 
@@ -463,12 +493,17 @@ def create_app(data_dir: str | None = None) -> Any:
                                           headers={"X-UserLoop-Bridge": str(bridge_token)})
                 except Exception:  # noqa: BLE001 —— 抑制同步失败不影响退订本身
                     pass
-        body = ("已为你退订，将不再收到此类邮件。" if data
-                else "链接已失效或签名无效，如需退订请联系客服。")
+        from userloop.i18n import resolve_locale, t as _t
+
+        locale = resolve_locale(request)
+        user_obj = await store.get_user((data or {}).get("u", "")) if data else None
+        if user_obj:
+            locale = resolve_locale(request, user_obj, cfg)
+        body = (_t("unsub.ok", locale) if data else _t("unsub.bad", locale))
         return HTMLResponse(f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>退订</title></head>
 <body style="font-family:-apple-system,'PingFang SC',sans-serif;padding:60px 20px;text-align:center;color:#1f2937">
-<h2 style="font-size:18px">邮件退订</h2><p style="color:#6b7280">{body}</p></body></html>""")
+<h2 style="font-size:18px">{_t("unsub.title", locale)}</h2><p style="color:#6b7280">{body}</p></body></html>""")
 
     # ---- H5 触点页（自持动态页：打开/点击追踪回流入旅程）----
 
@@ -884,6 +919,82 @@ def create_app(data_dir: str | None = None) -> Any:
         return JSONResponse({"ok": True, "name": rep["name"], "path": path,
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
+
+    # ---- 多租户 ----
+
+    @app.get(f"{prefix}/api/v1/tenants")
+    async def tenants_list(request: Request) -> JSONResponse:
+        from userloop.core.tenants import current_tenant
+
+        user = _user(request) or {}
+        allowed = set(user.get("tenants") or [DEFAULT_TENANT])
+        items = []
+        for t in tenants.registry.list():
+            if user.get("role") == "admin" or t["id"] in allowed:
+                items.append({"id": t["id"], "name": t["name"], "locale": t.get("locale"),
+                              "timezone_offset": t.get("timezone_offset"),
+                              "enabled": t.get("enabled", True)})
+        return JSONResponse({"count": len(items), "tenants": items, "current": current_tenant()})
+
+    @app.post(f"{prefix}/api/v1/tenants")
+    async def tenants_create(request: Request) -> JSONResponse:
+        user = _user(request) or {}
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="仅管理员可创建租户")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            rec = tenants.registry.create(str(body.get("id") or ""), name=str(body.get("name") or ""),
+                                         locale=str(body.get("locale") or "zh-CN"),
+                                         timezone_offset=int(body.get("timezone_offset") or 8),
+                                         storage=body.get("storage") or None)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        tstore = await tenants.get(rec["id"])
+        from userloop.core.templates import seed_canvas, seed_templates
+        from userloop.experiments.engine import seed_experiments
+
+        await seed_templates(tstore, rec["data_dir"])
+        await seed_canvas(tstore, rec["data_dir"])
+        await seed_experiments(tstore, rec["data_dir"])
+        return JSONResponse({"ok": True, "tenant": rec})
+
+    @app.post(f"{prefix}/api/v1/tenants/switch")
+    async def tenants_switch(request: Request) -> JSONResponse:
+        """切换当前会话的租户（仅限自己可见的租户；管理员可切任意）。"""
+        user = _user(request) or {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        tid = str(body.get("id") or "").strip()
+        allowed = set(user.get("tenants") or [DEFAULT_TENANT])
+        if user.get("role") != "admin" and tid not in allowed:
+            raise HTTPException(status_code=403, detail="无权访问该租户")
+        if not tenants.registry.get(tid):
+            raise HTTPException(status_code=404, detail="租户不存在")
+        sid = _sid(request)
+        if sid and sid in sessions._store:
+            sessions._store[sid] = {**sessions._store[sid], "tenant": tid}
+        return JSONResponse({"ok": True, "tenant": tid})
+
+    @app.patch(f"{prefix}/api/v1/tenants/{{tenant_id}}")
+    async def tenants_update(tenant_id: str, request: Request) -> JSONResponse:
+        user = _user(request) or {}
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="仅管理员可修改租户")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        rec = tenants.registry.update(tenant_id, **{k: v for k, v in body.items()
+                                                    if k in ("name", "locale", "timezone_offset",
+                                                             "enabled", "storage")})
+        if not rec:
+            raise HTTPException(status_code=404, detail="租户不存在")
+        return JSONResponse({"ok": True, "tenant": rec})
 
     # ---- 合规中心（consent / DSAR）----
 

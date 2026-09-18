@@ -25,6 +25,7 @@
     </div>
     <div class="bar-end">
       <span class="chip"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span><span id="live-state">调度运行中</span></span>
+      <button class="chip act" id="langBtn" onclick="toggleLang()" title="切换语言 / Language">中/EN</button>
       <button class="chip act" onclick="toggleTheme()" title="切换主题">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
       </button>
@@ -280,6 +281,34 @@
 const $ = id => document.getElementById(id);
 const fmt = s => (s || '').replace('T', ' ').slice(0, 19);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
+const UL_I18N = {
+  'zh-CN': {overview:'运营总览', journey:'旅程漏斗', loops:'Loop 运行', users:'用户档案', events:'事件流',
+            copilot:'Copilot 建流程', ai:'AI 大脑', predict:'预测洞察', segments:'智能分群',
+            report:'运营周报', ab:'A/B 实验', canvas:'画布编排'},
+  'en-US': {overview:'Overview', journey:'Journey', loops:'Loops', users:'Users', events:'Events',
+            copilot:'Copilot', ai:'AI Brain', predict:'Predictions', segments:'Segments',
+            report:'Weekly Report', ab:'A/B Tests', canvas:'Canvas'},
+};
+function currentLang(){ try { return localStorage.getItem('ul_lang') || 'zh-CN'; } catch(e){ return 'zh-CN'; } }
+function toggleLang(){
+  const next = currentLang() === 'zh-CN' ? 'en-US' : 'zh-CN';
+  try { localStorage.setItem('ul_lang', next); } catch(e){}
+  applyLang(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
+}
+function applyLang(){
+  const dict = UL_I18N[currentLang()] || UL_I18N['zh-CN'];
+  const map = [['#sidebar a.nv[data-sec=\'sec-overview\']','overview'], ['#sidebar a.nv[data-sec=\'sec-journey\']','journey'],
+               ['#sidebar a.nv[data-sec=\'sec-loops\']','loops'], ['#sidebar a.nv[data-sec=\'sec-users\']','users'],
+               ['#sidebar a.nv[data-sec=\'sec-events\']','events'], ['#sidebar a.nv[data-sec=\'sec-copilot\']','copilot'],
+               ['#sidebar a.nv[data-sec=\'sec-ai\']','ai'], ['#sidebar a.nv[data-sec=\'sec-predict\']','predict'],
+               ['#sidebar a.nv[data-sec=\'sec-segments\']','segments'], ['#sidebar a.nv[data-sec=\'sec-report\']','report'],
+               ['#sidebar a.nv[data-sec=\'sec-ab\']','ab']];
+  map.forEach(([sel, key])=>{
+    const el = document.querySelector(sel);
+    if (!el) return;
+    [...el.childNodes].forEach(n=>{ if (n.nodeType === 3 && n.textContent.trim()) n.textContent = dict[key]; });
+  });
+}
 function toggleTheme(){
   const root=document.documentElement, dark=root.getAttribute('data-theme')==='dark';
   if(dark){root.removeAttribute('data-theme');localStorage.setItem('ul_theme','light');}
@@ -624,6 +653,7 @@ schedule();
 rpLoad();
 sgList();
 prModel();
+applyLang();
 </script>
 </body>
 </html>
