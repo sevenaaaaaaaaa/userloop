@@ -139,3 +139,18 @@ def test_ecosystem_apis(tmp_path) -> None:
         # inFlow 未配置 → 明确报错而非静默
         assert client.post("/api/v1/integrations/inflow/sync").json()["ok"] is False
         assert client.get("/api/v1/integrations/inflow/insights").json()["count"] == 0
+
+
+def test_recipes_cover_real_inflow_types() -> None:
+    """覆盖 inFlow 真实产出的洞察类型（情报→动作要对得上）。"""
+    real_types = ["keyword_opportunity", "topic_negative_alert", "topic_digest", "narrative_metric",
+                  "competitor_pricing", "keyword_gap", "traffic_anomaly", "journey_gap", "site_change",
+                  "rfm_at_risk", "conversion_low", "nps_shift", "journey_content_gap",
+                  "retention_decline", "ltv_cac_unhealthy", "competitor_move"]
+    mapped = [t for t in real_types if t in inflow.INSIGHT_RECIPES]
+    assert len(mapped) >= 14, f"仅映射 {len(mapped)}/{len(real_types)}"
+    # 关键可执行类型必须有专属配方（而非兜底）
+    for t in ("rfm_at_risk", "retention_decline", "journey_gap", "topic_negative_alert",
+              "ltv_cac_unhealthy", "keyword_gap"):
+        assert t in inflow.INSIGHT_RECIPES and inflow.INSIGHT_RECIPES[t]["actions"]
+        assert inflow.recipe_for(t)["name"] != inflow.DEFAULT_RECIPE["name"]

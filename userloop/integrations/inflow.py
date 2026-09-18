@@ -71,6 +71,90 @@ INSIGHT_RECIPES: dict[str, dict[str, Any]] = {
         ],
         "goal_event": "purchase",
     },
+    # ── inFlow 真实产出的洞察类型（按需扩展）──
+    "rfm_at_risk": {
+        "name": "RFM 风险客户 → 挽回",
+        "trigger": {"type": "stage_enter", "stage": "churn_risk"},
+        "actions": [
+            {"type": "touch.email", "payload": {"subject": "专属回归礼已备好",
+                                                "text": "你有一份专属权益待领取，回来即可使用。",
+                                                "cta_text": "领取权益", "cta_url": "https://nownexts.com/"}},
+            {"type": "feishu", "payload": {"subject": "RFM 风险客户", "text": "{insight_summary}"}},
+        ],
+        "goal_event": "purchase",
+    },
+    "retention_decline": {
+        "name": "留存下降 → 沉默召回",
+        "trigger": {"type": "inactivity", "stage": "retained", "days": 14},
+        "actions": [{"type": "touch.email", "payload": {"subject": "好久不见，有新内容",
+                                                        "text": "我们更新了不少能力，值得你回来看看。",
+                                                        "cta_text": "回来看看", "cta_url": "https://nownexts.com/"}}],
+        "goal_event": "activation",
+    },
+    "journey_gap": {
+        "name": "旅程断点 → 激活引导",
+        "trigger": {"type": "inactivity", "stage": "signup", "days": 2},
+        "actions": [{"type": "touch.h5", "payload": {"title": "继续未完成的旅程",
+                                                     "text": "只差一步就能解锁全部功能。",
+                                                     "cta_text": "立即继续", "cta_url": "https://nownexts.com/"}}],
+        "goal_event": "activation",
+    },
+    "journey_content_gap": {
+        "name": "旅程内容缺口 → 内容生产 + 引导",
+        "trigger": {"type": "inactivity", "stage": "activated", "days": 7},
+        "actions": [
+            {"type": "mflow.create_content", "payload": {"topic": "补齐旅程内容：{insight_title}",
+                                                         "brief": "{insight_summary}"}},
+            {"type": "touch.h5", "payload": {"title": "为你补上这一步", "text": "{insight_summary}",
+                                             "cta_text": "查看", "cta_url": "https://nownexts.com/"}},
+        ],
+        "goal_event": "activation",
+    },
+    "topic_negative_alert": {
+        "name": "舆情负面 → 危机响应（预警 + 内容反击）",
+        "trigger": {"type": "stage_enter", "stage": "advocate"},
+        "actions": [
+            {"type": "feishu", "payload": {"subject": "⚠ 舆情负面预警", "text": "{insight_summary}"}},
+            {"type": "mflow.create_content", "payload": {"topic": "澄清/正面内容：{insight_title}",
+                                                         "brief": "{insight_summary}"}},
+        ],
+        "goal_event": None,
+    },
+    "ltv_cac_unhealthy": {
+        "name": "LTV:CAC 不健康 → 高价值运营",
+        "trigger": {"type": "stage_enter", "stage": "paying"},
+        "actions": [
+            {"type": "feishu", "payload": {"subject": "单位经济预警", "text": "{insight_summary}"}},
+            {"type": "openflow.webhook_insight", "payload": {"subject": "高价值客户信号",
+                                                             "text": "{insight_summary}"}},
+        ],
+        "goal_event": "purchase",
+    },
+    "keyword_gap": {
+        "name": "关键词缺口 → 内容补位",
+        "trigger": {"type": "stage_enter", "stage": "advocate"},
+        "actions": [{"type": "mflow.create_content", "payload": {"topic": "内容补位：{insight_title}",
+                                                                 "brief": "{insight_summary}"}}],
+        "goal_event": None,
+    },
+    "nps_shift": {
+        "name": "NPS 变化 → 团队预警",
+        "trigger": {"type": "event", "name": "nps_submit"},
+        "actions": [{"type": "feishu", "payload": {"subject": "NPS 变动", "text": "{insight_summary}"}}],
+        "goal_event": None,
+    },
+    "site_change": {
+        "name": "站点变更 → 团队预警",
+        "trigger": {"type": "event", "name": "site_changed"},
+        "actions": [{"type": "feishu", "payload": {"subject": "站点变更", "text": "{insight_summary}"}}],
+        "goal_event": None,
+    },
+    "topic_digest": {
+        "name": "舆情摘要 → 团队日报",
+        "trigger": {"type": "event", "name": "topic_digest_ready"},
+        "actions": [{"type": "feishu", "payload": {"subject": "舆情摘要", "text": "{insight_summary}"}}],
+        "goal_event": None,
+    },
 }
 DEFAULT_RECIPE = {
     "name": "情报跟进",
@@ -176,7 +260,8 @@ async def sync(store: Store, ctx: ExecutorContext, limit: int = 20, transport: A
         out = draft_from_insight(ins)
         draft = out["draft"]
         # 低风险（不含用户外发动作）可配置为自动启用，否则保持草稿待人工
-        has_outbound = any(a["type"].startswith(("touch.", "ai.", "email", "feishu"))
+        # 只要包含用户外发或内容产出动作，就不自动启用（一律人工确认）
+        has_outbound = any(a["type"].startswith(("touch.", "ai.", "email", "feishu", "mflow.", "openflow."))
                            for a in draft["actions"])
         enabled = bool(enable and not has_outbound)
         await store.put_template({**draft, "enabled": enabled})
