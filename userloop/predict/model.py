@@ -61,7 +61,7 @@ def _features_at(events: list[dict], user: dict, T: datetime) -> list[float]:
 
 
 def _build_dataset(users: list[dict], events_by_user: dict[str, list[dict]], label_event: str | None,
-                   reference_days: int = 14, horizon_days: int = 14, min_history: int = 2) -> tuple[list[list[float]], list[int]]:
+                   reference_days: int = 14, horizon_days: int = 14, min_history: int = 1) -> tuple[list[list[float]], list[int]]:
     """回放式构造数据集：T = now - reference_days；标签取 (T, T+horizon] 的目标事件（churn 则为"无事件"）。"""
     now = datetime.utcnow()
     T = now - timedelta(days=reference_days)
@@ -170,7 +170,8 @@ def adaptive_window(span_days: float, max_days: int = 14) -> tuple[int, int]:
 
 
 async def train(store: Store, data_dir: str, kind: str = "churn", limit: int = 1500,
-                reference_days: int | None = None, horizon_days: int | None = None) -> dict[str, Any]:
+                reference_days: int | None = None, horizon_days: int | None = None,
+                min_history: int = 1) -> dict[str, Any]:
     """训练并落盘；返回指标。kind: churn | propensity。
 
     reference_days/horizon_days 为 None 时按**数据跨度自适应**（新库也能尽早训练）。
@@ -192,7 +193,8 @@ async def train(store: Store, data_dir: str, kind: str = "churn", limit: int = 1
 
     label_event = None if kind == "churn" else "purchase"
     X, y = _build_dataset(users, events_by_user, label_event,
-                          reference_days=reference_days, horizon_days=horizon_days)
+                          reference_days=reference_days, horizon_days=horizon_days,
+                          min_history=min_history)
     if len(X) < 20 or len(set(y)) < 2:
         return {"ok": False, "samples": len(X), "positives": sum(y),
                 "window": {"reference_days": reference_days, "horizon_days": horizon_days,
