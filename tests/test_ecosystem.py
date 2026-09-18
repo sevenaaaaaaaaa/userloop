@@ -267,3 +267,25 @@ async def test_openflow_automation_posts_bridge_payload(tmp_path) -> None:
     assert res["ok"] and "/api/plugin/userloop-bridge/automation" in seen["url"]
     assert seen["body"]["event"] == "userloop_journey"
     assert seen["body"]["visitor_id"] == "anon_1" and seen["body"]["template_id"] == "tpl"
+
+
+async def test_openflow_automation_uses_bridge_token_header(tmp_path) -> None:
+    """回归：桥接插件用 X-UserLoop-Bridge 鉴权（此前发 Bearer → 鉴权失败 400）。"""
+    import httpx
+
+    ctx = _ctx(tmp_path, {"integrations": {"openflow": {"base_url": "http://of.test",
+                                                        "bridge_token": "bt-1"}}})
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"ok": True, "data": {"triggered": True}})
+
+    from userloop.actions.executors import execute_action
+
+    res = await execute_action(ctx, {"type": "openflow.automation",
+                                     "payload": {"_transport": httpx.MockTransport(handler),
+                                                 "event": "userloop_journey"}},
+                               {"id": "l", "template_id": "t"},
+                               {"id": "u", "distinct_id": "d1", "email": "a@x.com"})
+    assert res["ok"] and seen["headers"].get("x-userloop-bridge") == "bt-1"

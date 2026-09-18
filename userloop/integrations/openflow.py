@@ -89,14 +89,31 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
                 "loop_id": loop.get("id"), "template_id": loop.get("template_id"),
                 "message": text, "extra": payload.get("data", {}),
             }
-            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            # 桥接插件用 X-UserLoop-Bridge 鉴权（Bearer 仅作兼容）
+            bridge_token = payload.get("bridge_token") or cfg.get("bridge_token") or ""
+            headers = {"Content-Type": "application/json"}
+            if bridge_token:
+                headers["X-UserLoop-Bridge"] = bridge_token
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             async with _client(transport) as client:
                 resp = await client.post(f"{base.rstrip('/')}{path}", json=body, headers=headers)
+            if resp.status_code >= 400:
+                try:
+                    msg = (resp.json() or {}).get("error") or (resp.json() or {}).get("message") or ""
+                except ValueError:
+                    msg = resp.text[:120]
+                result.update(error=msg or f"HTTP {resp.status_code}")
             result.update(ok=200 <= resp.status_code < 300, status_code=resp.status_code)
         elif atype == "openflow.plugin_api":
             method = payload.get("method", "insights")
             token = payload.get("token") or cfg.get("token") or ""
-            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            bridge_token = payload.get("bridge_token") or cfg.get("bridge_token") or ""
+            headers = {"Content-Type": "application/json"}
+            if bridge_token:
+                headers["X-UserLoop-Bridge"] = bridge_token
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             async with _client(transport) as client:
                 resp = await client.post(
                     f"{base.rstrip('/')}/api/plugin/userloop/{method.lstrip('/')}",
