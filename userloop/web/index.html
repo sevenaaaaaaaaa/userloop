@@ -486,25 +486,7 @@ function render(r){
       <div class="tm">${fmt(e.created_at)}</div></div>`).join('')
     || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
 
-  // 预测洞察
-  (async function loadPredictions(){
-    try {
-      const [ch, lt] = await Promise.all([j('api/v1/predictions?sort=churn&limit=8'),
-                                          j('api/v1/predictions?sort=ltv&limit=8')]);
-      $('churnSub').textContent = `共 ${ch.count} 条（churn 分数 + 归因）`;
-      $('churnTop').innerHTML = (ch.items||[]).map(x=>`
-        <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-        <td class="mono nw" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${x.churn}</td>
-        <td class="wrap" style="color:var(--muted);max-width:280px"><div class="clamp2" title="${esc(((x.reasons||{}).churn||[])[0]||'')}">${((x.reasons||{}).churn||[])[0]||'—'}</div></td>
-        <td><button class="btn ghost sm" onclick="prDecide('${x.distinct_id}')">让 AI 决策</button></td></tr>`).join('')
-        || '<tr><td colspan="5" style="color:var(--faint)">暂无数据（点「立即重算一批」）</td></tr>';
-      $('ltvTop').innerHTML = (lt.items||[]).map(x=>`
-        <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-        <td class="mono nw">${x.ltv}</td><td><span class="tag ${x.tier==='vip'||x.tier==='high'?'ok':''}">${x.tier||'—'}</span></td>
-        <td class="mono">${x.propensity}</td></tr>`).join('')
-        || '<tr><td colspan="5" style="color:var(--faint)">暂无数据</td></tr>';
-    } catch(e) { /* 静默 */ }
-  })();
+  // 预测洞察（列表在分区进入视口时懒加载，见 prList/setupLazy）
   // 渠道效果（NB Channel 依据）
   const ch = d.channels || {};
   const chRows = Object.entries(ch).map(([name, v])=>{
@@ -734,7 +716,7 @@ async function sgDecide(id){
     await fetch('api/v1/ai/decide', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({distinct_id: u.distinct_id, force:true})});
   }
-  toast('已完成，见 AI 大脑面板'); load(true);
+  toast('已完成，见 AI 大脑面板'); load(true); prList();
 }
 async function prTrain(){
   $('modelMeta').textContent = '训练中…（回放式特征+标签）';
@@ -742,7 +724,25 @@ async function prTrain(){
     body: JSON.stringify({kinds:['churn','propensity']})})).json();
   const ch = (r.results||{}).churn || {};
   toast(ch.ok ? `模型已更新：样本 ${ch.samples}，AUC ${ch.auc}` : `样本不足：${ch.reason||''}`);
-  prModel();
+  prModel(); prList();
+}
+async function prList(){
+  try {
+    const [ch, lt] = await Promise.all([j('api/v1/predictions?sort=churn&limit=8'),
+                                        j('api/v1/predictions?sort=ltv&limit=8')]);
+    $('churnSub').textContent = `共 ${ch.count} 条（churn 分数 + 归因）`;
+    $('churnTop').innerHTML = (ch.items||[]).map(x=>`
+      <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
+      <td class="mono nw" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${x.churn}</td>
+      <td class="wrap" style="color:var(--muted);max-width:280px"><div class="clamp2" title="${esc(((x.reasons||{}).churn||[])[0]||'')}">${((x.reasons||{}).churn||[])[0]||'—'}</div></td>
+      <td><button class="btn ghost sm" onclick="prDecide('${x.distinct_id}')">让 AI 决策</button></td></tr>`).join('')
+      || '<tr><td colspan="5" style="color:var(--faint)">暂无数据（点「立即重算一批」）</td></tr>';
+    $('ltvTop').innerHTML = (lt.items||[]).map(x=>`
+      <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
+      <td class="mono nw">${x.ltv}</td><td><span class="tag ${x.tier==='vip'||x.tier==='high'?'ok':''}">${x.tier||'—'}</span></td>
+      <td class="mono">${x.propensity}</td></tr>`).join('')
+      || '<tr><td colspan="5" style="color:var(--faint)">暂无数据</td></tr>';
+  } catch(e) { /* 静默 */ }
 }
 async function prModel(){
   try {
@@ -756,13 +756,13 @@ async function prModel(){
 async function prRecompute(){
   const r = await (await fetch('api/v1/predictions/recompute', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({limit:50})})).json();
-  toast(`已重算 ${r.computed} 个用户`); load(true);
+  toast(`已重算 ${r.computed} 个用户`); load(true); prList();
 }
 async function prDecide(distinctId){
   const r = await (await fetch('api/v1/ai/decide', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({distinct_id: distinctId, force:true})})).json();
   const d = r.decision || {};
-  toast(`AI: ${d.intent}（${d.status}）`); load(true);
+  toast(`AI: ${d.intent}（${d.status}）`); load(true); prList();
 }
 async function aiBatchApprove(){
   if (!confirm('批量批准所有「中风险」待批决策并立即执行？')) return;
@@ -820,7 +820,7 @@ async function aiDecide(){
   try{
     const r = await (await fetch('api/v1/ai/decide', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({limit:3, force:true})})).json();
-    toast(`已决策 ${r.count || 1} 条`); await load(true);
+    toast(`已决策 ${r.count || 1} 条`); await load(true); prList();
   }catch(e){ toast('决策失败：'+e.message); }
 }
 async function aiApprove(id){
@@ -866,7 +866,7 @@ function setupLazy(){
   };
   lazyLoad('sec-report', rpLoad);
   lazyLoad('sec-segments', sgList);
-  lazyLoad('sec-predict', prModel);
+  lazyLoad('sec-predict', () => { prList(); prModel(); });
   lazyLoad('sec-evolve', evoLoad);
   lazyLoad('sec-eco', ecoLoad);
   lazyLoad('sec-assets', asLoad);
