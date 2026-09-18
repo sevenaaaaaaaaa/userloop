@@ -154,3 +154,16 @@ def test_recipes_cover_real_inflow_types() -> None:
               "ltv_cac_unhealthy", "keyword_gap"):
         assert t in inflow.INSIGHT_RECIPES and inflow.INSIGHT_RECIPES[t]["actions"]
         assert inflow.recipe_for(t)["name"] != inflow.DEFAULT_RECIPE["name"]
+
+
+async def test_count_events_matching_uses_event_backend(store: Store) -> None:
+    """回归：内容归因计数必须走事件存储后端（此前查 SQLite 兜底表 → 恒 0）。"""
+    u = await store.upsert_user("cm1")
+    await store.insert_event({"user_id": u["id"], "distinct_id": "cm1", "event": "page_view",
+                              "props": {"utm_campaign": "cmp-1", "url": "https://x/a"},
+                              "source": "web", "event_id": "cm-1", "created_at": "2026-09-08T10:00:00Z"})
+    n = await store.count_events_matching("utm_campaign", "cmp-1", "2026-09-02T00:00:00Z",
+                                          "2026-09-16T00:00:00Z")
+    assert n == 1
+    assert await store.count_events_matching("utm_campaign", "cmp-1", "2026-09-09T00:00:00Z",
+                                             "2026-09-16T00:00:00Z") == 0
