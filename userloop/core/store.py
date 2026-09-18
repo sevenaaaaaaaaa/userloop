@@ -149,6 +149,16 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_scores (
+    user_id TEXT PRIMARY KEY,
+    churn REAL NOT NULL DEFAULT 0,
+    ltv REAL NOT NULL DEFAULT 0,
+    propensity REAL NOT NULL DEFAULT 0,
+    tier TEXT NOT NULL DEFAULT '',
+    reasons TEXT NOT NULL DEFAULT '{}',
+    computed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS touch_blocks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
@@ -660,6 +670,97 @@ class Store:
             "WHERE l.user_id=? AND a.executed_at>=? AND a.type NOT IN ('noop')", (user_id, since))
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
+
+    async def upsert_user_score(self, row: dict) -> None:
+        """写入预测分数（churn/ltv/propensity + 归因）。"""
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO user_scores (user_id, churn, ltv, propensity, tier, reasons, computed_at) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET churn=excluded.churn, "
+            "ltv=excluded.ltv, propensity=excluded.propensity, tier=excluded.tier, "
+            "reasons=excluded.reasons, computed_at=excluded.computed_at",
+            (row["user_id"], float(row["churn"]), float(row["ltv"]), float(row["propensity"]),
+             row.get("tier", ""), j(row.get("reasons", {})), row["computed_at"]),
+        )
+
+    async def get_user_score(self, user_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM user_scores WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def resolve_identity(self, type_: str, value: str) -> str | None:
+        """按渠道标识反查 user_id（email 归一化小写）。"""
+        assert self.db
+        v = str(value).strip().lower() if type_ == "email" else str(value).strip()
+        cur = await self.db.execute("SELECT user_id FROM identities WHERE type=? AND value=?", (type_, v))
+        row = await cur.fetchone()
+        return row["user_id"] if row else None
+
+    async def bind_identity(self, user_id: str, type_: str, value: str,
+                            source: str = "", verified: bool = False) -> None:
+        assert self.db
+        v = str(value).strip().lower() if type_ == "email" else str(value).strip()
+        await self.db.execute(
+            "INSERT INTO identities (user_id, type, value, verified, source, created_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(type, value) DO UPDATE SET user_id=excluded.user_id, source=excluded.source",
+            (user_id, type_, v, 1 if verified else 0, source, iso_now()),
+        )
+        # email 是档案主标识：识别后同步到 users.email（不覆盖已有值）
+        if type_ == "email" and v:
+            await self.db.execute(
+                "UPDATE users SET email=COALESCE(email, ?) WHERE id=?", (v, user_id))
+
+    async def merge_users(self, primary_id: str, secondary_id: str) -> dict:
+        """把一个用户合并进另一个（身份归一化核心）：跨表迁移 + 档案择优合并，删除副档案。
+
+        择优规则：阶段取更靠后、stats 数值累加/时间取新、props 主档案优先、email/name 缺失补齐。
+        """
+        assert self.db
+        if not primary_id or not secondary_id or primary_id == secondary_id:
+            return {"merged": False, "reason": "id 相同或为空"}
+        primary = await self.get_user(primary_id)
+        secondary = await self.get_user(secondary_id)
+        if not primary or not secondary:
+            return {"merged": False, "reason": "用户不存在"}
+
+        # 1) 事件归属迁移
+        moved_events = await self.events.reassign_user(secondary_id, primary_id)
+
+        # 2) 其余关联表迁移（存在即更新；表不存在则忽略）
+        for table in ("identities", "stage_transitions", "loops", "ai_decisions",
+                      "ab_assignments", "canvas_runs", "canvas_waits", "touch_log",
+                      "touch_blocks", "touch_pages", "user_scores"):
+            try:
+                await self.db.execute(f"UPDATE {table} SET user_id=? WHERE user_id=?", (primary_id, secondary_id))
+            except aiosqlite.Error:
+                pass
+
+        # 3) 档案择优合并
+        from userloop.core.entities import STAGE_ORDER
+
+        stages = [primary.get("stage", "visitor"), secondary.get("stage", "visitor")]
+        best_stage = max(stages, key=lambda x: STAGE_ORDER.get(x, 0))
+        p_stats = pj(primary.get("stats"), {}) or {}
+        s_stats = pj(secondary.get("stats"), {}) or {}
+        merged_stats = dict(p_stats)
+        for k, v in s_stats.items():
+            if isinstance(v, (int, float)) and isinstance(merged_stats.get(k), (int, float)):
+                merged_stats[k] = merged_stats[k] + v
+            elif k not in merged_stats or (isinstance(v, str) and v > str(merged_stats.get(k, ""))):
+                merged_stats[k] = v
+        merged_props = {**(pj(secondary.get("props"), {}) or {}), **(pj(primary.get("props"), {}) or {})}
+        await self.db.execute(
+            "UPDATE users SET stage=?, email=COALESCE(email, ?), name=COALESCE(name, ?), stats=?, props=?, "
+            "first_seen=MIN(first_seen, ?), last_seen=MAX(last_seen, ?) WHERE id=?",
+            (best_stage, secondary.get("email"), secondary.get("name"),
+             j(merged_stats), j(merged_props), secondary.get("first_seen"), secondary.get("last_seen"),
+             primary_id))
+        # 4) 记录副档案的 distinct_id 为匿名标识（后续同源事件继续归并）
+        await self.bind_identity(primary_id, "anonymous_id", secondary.get("distinct_id", ""), source="merge")
+        await self.db.execute("DELETE FROM users WHERE id=?", (secondary_id,))
+        return {"merged": True, "primary": primary_id, "secondary": secondary_id,
+                "moved_events": moved_events, "stage": best_stage}
 
     async def of_user_identities(self, user_id: str) -> dict[str, str]:
         """该用户在各渠道的标识（email/phone/openid/wecom 等）。"""

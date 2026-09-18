@@ -56,7 +56,15 @@ _TEMPLATE = """/* UserLoop Tracker v1 —— 嵌入：<script src="/track.js"></
       fetch(EP, { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true });
     }
   }
-  window.userloop = { track: track, flush: function(){ flush(true); }, uid: uid, session: sid };
+  // 识别：userloop.identify({email}) / userloop.identify("a@b.com")
+  function identify(input) {
+    var email = typeof input === "string" ? input : (input && input.email);
+    var phone = typeof input === "object" && input ? input.phone : null;
+    if (!email && !phone) return;
+    track("identify", { email: email || "", phone: phone || "" });
+    flush(true);
+  }
+  window.userloop = { track: track, identify: identify, flush: function(){ flush(true); }, uid: uid, session: sid };
   track("page_view", { page: location.pathname, ref: document.referrer, title: document.title });
   document.addEventListener("click", function (e) {
     var el = e.target.closest("[data-ul-track],a,button");

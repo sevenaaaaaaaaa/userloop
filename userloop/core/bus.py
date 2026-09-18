@@ -43,7 +43,36 @@ async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) ->
     p = _norm_payload(payload)
     now_iso = iso()
 
-    user = await store.upsert_user(p["distinct_id"], email=p["email"], name=p["name"], props=p["props"])
+    # ── 身份识别（识别优先级：匿名标识已知归属 > distinct_id 命中 > 新建）──
+    merged_info: dict | None = None
+    known = await store.resolve_identity("anonymous_id", p["distinct_id"])
+    if known:
+        user = await store.get_user(known) or await store.upsert_user(
+            p["distinct_id"], email=p["email"], name=p["name"], props=p["props"])
+    else:
+        user = await store.upsert_user(p["distinct_id"], email=p["email"], name=p["name"], props=p["props"])
+
+    # 事件里带实名标识（email/phone/openid）→ 绑定；若标识已属他人则**合并**（匿名→实名归一）
+    ident_props = {**(p["props"] or {})}
+    if p.get("email"):
+        ident_props.setdefault("email", p["email"])
+    ident_map = {"email": "email", "phone": "phone", "mobile": "phone",
+                 "openid": "wechat_openid", "unionid": "wechat_unionid",
+                 "wecom_userid": "wecom_userid", "visitor_id": "websflow_visitor"}
+    for key, type_ in ident_map.items():
+        val = ident_props.get(key)
+        if not val:
+            continue
+        owner = await store.resolve_identity(type_, str(val))
+        if owner and owner != user["id"]:
+            # 以已有实名档案为主档案（保留其历史），把当前（通常匿名）档案并进去
+            merged_info = await store.merge_users(owner, user["id"])
+            user = await store.get_user(owner) or user
+        else:
+            await store.bind_identity(user["id"], type_, str(val), source="event")
+    # 记住匿名来源，后续同源事件继续归并到实名档案
+    if p["distinct_id"] and not await store.resolve_identity("anonymous_id", p["distinct_id"]):
+        await store.bind_identity(user["id"], "anonymous_id", p["distinct_id"], source="bus")
 
     # 1. 事件落库（event_id 幂等去重）
     event_record = {
@@ -106,6 +135,8 @@ async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) ->
         "status": "ok",
         "event": p["event"],
         "user_id": user["id"],
+        "identified": bool(user.get("email") or user.get("stage") not in (None, "visitor")),
+        "merged": bool(merged_info and merged_info.get("merged")),
         "stage": user["stage"],
         "stage_changed": transition is not None,
         "breakpoints": breakpoints,
