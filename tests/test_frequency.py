@@ -199,3 +199,23 @@ async def test_legacy_email_action_respects_frequency(store: Store, tmp_path) ->
                                {"id": "l", "template_id": "tpl"}, u)
     assert res["ok"] is False and res.get("blocked_by_frequency") is True
     assert "全局间隔" in res["note"]
+
+
+async def test_transactional_does_not_consume_quota(tmp_path) -> None:
+    """事务类消息（收据）发出后不应占用营销周配额。"""
+    store = Store(str(tmp_path / "tx.db"), {})
+    await store.connect()
+    try:
+        ctx = ExecutorContext(str(tmp_path), {"touch": {"frequency": {"enabled": True, "quiet_hours": [0, 0],
+                                                                     "global_gap_hours": 24, "weekly_cap": 3}}})
+        ctx.store = store
+        # 通过包装层真实执行（dry-run 也算成功，但不该入台账）
+        u = await store.upsert_user("tx1", email="tx1@x.com")
+        res = await execute_action(ctx, {"type": "email", "payload": {"subject": "订单收据", "text": "收据"}},
+                                   {"id": "l", "template_id": "order_receipt"}, u)
+        assert res.get("ok") is True
+        rows = await store.recent_touches(u["id"], hours=24)
+        assert rows == [], "事务类不应写入营销台账"
+        assert (await frequency.check(store, ctx, u, "email", "tpl"))["ok"] is True
+    finally:
+        await store.close()
