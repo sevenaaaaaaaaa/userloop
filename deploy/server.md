@@ -52,6 +52,8 @@
 - **H5/落地页**：经 **WebsFlow 后台** `https://nownexts.com/webflow/api`（服务账号 `userloop-bot@nownexts.com`，凭据 `data/websflow-bot.txt` 600）；公网页 `/webflow/p/<token>`
 - **短信**：`touch.sms.provider` ∈ aliyun|tencent|webhook，现值 `enabled=false`（填 AK/SK + 报备签名模板即生效）
 - **MFlow（长内容）**：线上 API `https://nownexts.com/mflow`（服务账号 `userloop-bot`/operator，凭据 `data/mflow-bot.txt` 600）；`create_content` 建 item + 入队，MFlow agent 自产稿并推进状态机
+- **识别/合规/预测**：`POST /userloop/api/v1/identify`、`/api/v1/compliance/{consent,export,erase}`、
+  `/api/v1/predictions/*`、`/api/v1/segments/nl`；H5 留资表单（`touch.lead_capture.enabled`）
 - **回执**：邮件 `email_open/email_click/email_unsubscribed`、H5 `h5_view/h5_click` → 事件总线 → 旅程/验证回流
 
 ## 本地日常
