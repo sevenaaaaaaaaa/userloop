@@ -127,3 +127,19 @@ AI 提案: 3 条（含 apply_key=frequency.global_gap_hours: 24，影响/风险/
 
 **验收（线上实测）**：空租户 → 预览 3 模板/1 实验/2 分群 → 一键应用 → `add_to_cart` 事件触发
 `ec_cart_abandon` Loop（`ai.email` 动作按 120 分钟延迟排队）→ 模板改名后回滚恢复。
+
+## 十、识别率攻坚：跨系统身份映射（v0.5.1 起）
+
+识别率是文档记录的最大数据质量瓶颈（线上 3.5%）。本轮打通两条实名来源：
+
+- **OpenFlow member_id ↔ UserLoop 身份**：桥接 tracker 插件转发 `openflow_member_id` /
+  `openflow_visitor_id`（**命名空间化**，避免与 WebsFlow 的 `visitor_id` 语义冲突）+ 顶层 `email`；
+  UserLoop 侧 `ident_map` 增加 `member_id→openflow_member`、`openflow_member_id→openflow_member`、
+  `openflow_visitor_id→openflow_visitor`。同会员从不同设备进来 → 自动归并到同一档案
+- **WebsFlow 表单提交自动实名**：页面注入脚本监听 `submit`（capture，**不拦截提交**），
+  抓取表单内邮箱/手机号 → `form_submit` 事件 + `userloop.identify({email, phone})`。
+  注意：**已发布页面保持旧脚本**，需重建/重发布才带表单抓取
+
+**验收（线上实测）**：`of_anon_dev1` 浏览建档 → 注册带 `M-1001`+邮箱（同档案）→
+`of_anon_dev2` 带同一 `member_id` → **归并 True**；`openflow_member`/`openflow_visitor` 均可解析；
+WebsFlow 注入脚本含 `form_submit` 抓取与自动 `identify`，且无 `preventDefault`。
