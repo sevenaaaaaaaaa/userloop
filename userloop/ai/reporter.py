@@ -41,10 +41,13 @@ async def collect(store: Store, ctx: ExecutorContext, days: int = 7) -> dict[str
     total_users = sum(stages.values()) or 1
     counts = await store.counts()
 
-    # 漏斗与转化
+    # 漏斗与转化（区分匿名访客与实名用户：避免"访客多、注册少"被误读为转化差）
     order = ("visitor", "signup", "activated", "paying", "retained", "advocate", "churn_risk", "churned")
     funnel = [{"stage": s, "users": stages.get(s, 0),
                "share": round(stages.get(s, 0) / total_users * 100, 1)} for s in order]
+    identified = sum(v for k, v in stages.items() if k != "visitor")
+    audience = {"total": total_users, "anonymous_visitor": stages.get("visitor", 0), "identified": identified,
+                "identified_share": round(identified / total_users * 100, 1) if total_users else 0}
 
     # Loop 与回流
     loops = await store.list_loops(limit=500)
@@ -78,6 +81,7 @@ async def collect(store: Store, ctx: ExecutorContext, days: int = 7) -> dict[str
 
     return {
         "window_days": days,
+        "audience": audience,
         "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "counts": counts,
         "funnel": funnel,
@@ -99,7 +103,9 @@ def _stats_brief(stats: dict[str, Any]) -> str:
         "窗口天数": stats["window_days"],
         "用户总数": stats["counts"].get("users"),
         "事件总数": stats["counts"].get("events"),
-        "漏斗": [{"阶段": f["stage"], "人数": f["users"], "占比": f["share"]} for f in stats["funnel"]],
+        "受众": stats["audience"],
+        "漏斗（流量口径，含匿名访客）": [{"阶段": f["stage"], "人数": f["users"], "占比": f["share"]}
+                                        for f in stats["funnel"]],
         "Loop": stats["loops"],
         "模板效果": stats["template_effect"],
         "A/B结论": [{"实验": e["id"], "结论": e["verdict"], "领先": e["leader"], "置信": e["confidence"]}
@@ -160,7 +166,10 @@ def _render_markdown(stats: dict[str, Any], narrative: str) -> str:
     lines += [f"- 用户 {stats['counts'].get('users')} · 事件 {stats['counts'].get('events')} · "
               f"Loop {stats['loops']['total']}（运行中 {stats['loops']['running']}） · "
               f"回流 {stats['counts'].get('feedback')}"]
-    lines += ["- 漏斗：" + " / ".join(f"{f['stage']} {f['users']}({f['share']}%)" for f in stats["funnel"])]
+    au = stats.get("audience") or {}
+    lines += [f"- 受众：实名 {au.get('identified', '—')}（{au.get('identified_share', '—')}%）· "
+              f"匿名访客 {au.get('anonymous_visitor', '—')}"]
+    lines += ["- 漏斗（流量口径）：" + " / ".join(f"{f['stage']} {f['users']}({f['share']}%)" for f in stats["funnel"])]
     if stats["template_effect"]:
         lines += ["- 模板效果（effective 率）：" +
                   "；".join(f"{t['template']} {t['rate']}%" for t in stats["template_effect"][:5])]

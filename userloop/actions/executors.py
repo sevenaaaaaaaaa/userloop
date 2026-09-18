@@ -37,6 +37,12 @@ class ExecutorContext:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _iso_now() -> str:
+    from userloop.core.store import iso_now
+
+    return iso_now()
+
+
 def render_text(template: str, user: dict, loop: dict) -> str:
     """极简模板渲染：{email} {name} {stage} {template_id}。"""
     mapping = {
@@ -235,6 +241,16 @@ async def execute_action(
         try:
             await _freq.record(store, user, rec_channel, atype,
                                template_id=loop.get("template_id"), loop_id=loop.get("id"))
-        except Exception:  # noqa: BLE001 —— 台账失败不影响投递结果
+            # 投递回执：上报 sent 事件（渠道效果/送达率指标依赖它）
+            if store is not None and rec_channel in ("email", "sms"):
+                await store.insert_event({
+                    "user_id": user.get("id", ""), "distinct_id": user.get("distinct_id", ""),
+                    "event": f"{rec_channel}_sent",
+                    "props": {"template_id": loop.get("template_id"), "loop_id": loop.get("id"),
+                              "action": atype, "channel": rec_channel},
+                    "source": "touch", "event_id": None,
+                    "created_at": _iso_now(),
+                })
+        except Exception:  # noqa: BLE001 —— 台账/回执失败不影响投递结果
             pass
     return result
