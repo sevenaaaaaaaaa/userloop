@@ -80,6 +80,7 @@ class EventStore(Protocol):
     async def reassign_user(self, old_user_id: str, new_user_id: str) -> int: ...
     async def delete_user(self, user_id: str) -> int: ...
     async def count_matching_prop(self, key: str, value: str, since: str, before: str) -> int: ...
+    async def count_matching_any(self, pairs: list[tuple[str, str]], since: str, before: str) -> int: ...
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict: ...
     async def total(self) -> int: ...
     async def close(self) -> None: ...
@@ -164,6 +165,17 @@ class SqliteEventStore:
         cur = await self.db.execute(
             "SELECT COUNT(*) c FROM events WHERE created_at>=? AND created_at<? AND props LIKE ?",
             (since, before, f'%"{key}"%{value}%'))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def count_matching_any(self, pairs: list[tuple[str, str]], since: str,
+                                 before: str) -> int:
+        """窗口内 props 命中**任一** signal 的**事件数（去重，不重复计数）**。"""
+        conds = " OR ".join("props LIKE ?" for _ in pairs)
+        args: list[Any] = [since, before]
+        args += [f'%"{k}"%{v}%' for k, v in pairs]
+        cur = await self.db.execute(
+            f"SELECT COUNT(*) c FROM events WHERE created_at>=? AND created_at<? AND ({conds})", args)
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
@@ -279,6 +291,14 @@ class MySqlEventStore:
         rows = await self._rows(
             "SELECT COUNT(*) c FROM events WHERE created_at>=%s AND created_at<%s AND props LIKE %s",
             (since, before, f'%"{key}"%{value}%'))
+        return int(rows[0]["c"]) if rows else 0
+
+    async def count_matching_any(self, pairs: list[tuple[str, str]], since: str,
+                                 before: str) -> int:
+        conds = " OR ".join("props LIKE %s" for _ in pairs)
+        args: tuple = (since, before) + tuple(f'%"{k}"%{v}%' for k, v in pairs)
+        rows = await self._rows(
+            f"SELECT COUNT(*) c FROM events WHERE created_at>=%s AND created_at<%s AND ({conds})", args)
         return int(rows[0]["c"]) if rows else 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:

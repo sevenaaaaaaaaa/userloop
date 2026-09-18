@@ -63,14 +63,13 @@ async def verify_due_publications(store: Store, limit: int = 50) -> list[dict]:
         base_start = (start - span).isoformat(timespec="seconds") + "Z"
         base_end = pub["published_at"]
 
-        hits = 0
-        for key, val in (("utm_campaign", pub["item_id"]), ("url", pub["url"])):
-            if not val:
-                continue
-            hits += await store.count_events_matching(key, val, pub["published_at"], window_end)
-        baseline = 0
+        pairs = [("utm_campaign", pub["item_id"])]
         if pub["url"]:
-            baseline = await store.count_events_matching("url", pub["url"], base_start, base_end)
+            pairs.append(("url", pub["url"]))
+        # OR 去重：同一事件同时命中两个信号只计一次
+        hits = await store.events.count_matching_any(pairs, pub["published_at"], window_end)
+        baseline = await store.events.count_matching_any(
+            [("url", pub["url"])] if pub["url"] else [], base_start, base_end)
 
         verdict = "effective" if hits > max(1, baseline) * 1.2 else "neutral"
         evidence = {"hits": hits, "baseline": baseline, "window": [pub["published_at"], window_end],
