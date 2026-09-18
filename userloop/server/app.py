@@ -657,6 +657,34 @@ def create_app(data_dir: str | None = None) -> Any:
             body = {}
         return JSONResponse(await ab.promote(store, exp_id, body.get("variant")))
 
+    # ---- Copilot：自然语言建流程（AI Native 编排）----
+
+    @app.post(f"{prefix}/api/v1/copilot/draft")
+    async def copilot_draft(request: Request) -> JSONResponse:
+        from userloop.ai import copilot
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        prompt = str(body.get("prompt") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="缺少 prompt")
+        return JSONResponse(await copilot.draft_loop(ctx, prompt))
+
+    @app.post(f"{prefix}/api/v1/copilot/apply")
+    async def copilot_apply(request: Request) -> JSONResponse:
+        from userloop.ai import copilot
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        draft = body.get("draft") or {}
+        if not isinstance(draft, dict) or not draft.get("actions"):
+            raise HTTPException(status_code=400, detail="draft 无效（缺少 actions）")
+        return JSONResponse(await copilot.apply_loop(store, draft, enable=bool(body.get("enable"))))
+
     # ---- 运维 API ----
 
     @app.post(f"{prefix}/api/v1/ops/run-tick")

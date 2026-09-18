@@ -47,8 +47,31 @@ async def dispatch(ctx: Any, action: dict, loop: dict, user: dict, store: Any = 
         except Exception:  # noqa: BLE001 —— 实验异常不得影响正常交付
             ab = None
 
+    # 发前质检门（保护终端用户体验与发件声誉）
+    last_qc: dict = {}
+    qc_cfg = (ctx.config.get("touch") or {}).get("qc") or {}
+    if qc_cfg.get("enabled", True):
+        from userloop.touch import qc as qc_mod
+
+        if channel in ("email",):
+            from userloop.touch.render import render_email
+
+            rendered = render_email(spec, user, ctx.config)
+            issues = qc_mod.check_email(rendered["subject"], rendered["html"])
+        else:
+            issues = qc_mod.check_h5(spec.title, spec.body, spec.cta_text, spec.cta_url)
+        verdict = qc_mod.summarize(issues)
+        if not verdict["ok"] and qc_cfg.get("mode", "block") == "block":
+            return {"type": atype, "channel": channel, "ok": False, "blocked_by_qc": True,
+                    "spec": {"title": spec.title, "cta": spec.cta_text},
+                    "note": "发前质检未通过：" + "；".join(i["message"] for i in verdict["blocking"][:3]),
+                    "qc": verdict}
+        last_qc = verdict
+
     result = await driver.deliver(spec, user, ctx)
     out = {"type": atype, "channel": channel, "spec": {"title": spec.title, "cta": spec.cta_text}}
+    if last_qc.get("warnings"):
+        out["qc"] = {"warnings": last_qc["warnings"]}
     if ab:
         out["ab"] = ab
     out.update(result.as_dict())
