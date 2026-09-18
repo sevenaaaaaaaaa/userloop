@@ -48,6 +48,11 @@ def cfg_of(ctx: ExecutorContext) -> dict[str, Any]:
         if k in ("channel_gap_hours", "channel_weekly_cap") and isinstance(v, dict):
             out[k] = {**DEFAULTS[k], **v}
         elif k in DEFAULTS:
+            # 防御：类型不符（如被误写成 {}）时忽略，回落默认，避免破坏触达链路
+            if k in ("global_gap_hours", "weekly_cap", "tz_offset_hours") and not isinstance(v, int):
+                continue
+            if k == "quiet_hours" and not isinstance(v, list):
+                continue
             out[k] = v
     return out
 
