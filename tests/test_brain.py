@@ -119,3 +119,63 @@ async def test_brain_disabled_by_default(tmp_path) -> None:
     ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t"}})  # brain.enabled 未设
     assert await brain.run_batch(store, ctx, limit=3) == []
     await store.close()
+
+
+# ── Copilot：自然语言建流程（草稿 + 强校验）──
+
+async def test_copilot_draft_and_validate(tmp_path) -> None:
+    import httpx as _httpx
+
+    from userloop.ai import copilot
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        import json as _json
+
+        return _httpx.Response(200, json={"model": "deepseek-chat", "choices": [{"message": {"content": _json.dumps({
+            "name": "注册未激活引导",
+            "description": "注册后 3 天未激活 → 邮件引导",
+            "trigger": {"type": "inactivity", "stage": "signup", "days": 3},
+            "actions": [{"type": "ai.email", "payload": {"topic": "引导激活", "brief": "完成第一个项目"}},
+                        {"type": "不存在的动作", "payload": {}}],
+            "goal_event": "activation", "verify_window_hours": 72, "cooldown_hours": 168,
+        }, ensure_ascii=False)}}]})
+
+    ctx = _ctx(tmp_path)
+    res = await copilot.draft_loop(ctx, "注册3天没激活就发邮件", transport=_httpx.MockTransport(handler))
+    assert res["ok"] is True
+    d = res["draft"]
+    assert d["enabled"] is False                      # 草稿态，必须人工启用
+    assert d["trigger"] == {"type": "inactivity", "stage": "signup", "days": 3}
+    assert len(d["actions"]) == 1                     # 非法动作被丢弃
+    assert any("不在白名单" in w for w in res["warnings"])
+    assert d["goal_event"] == "activation"
+
+
+async def test_copilot_validate_clamps_and_fallbacks() -> None:
+    from userloop.ai import copilot
+
+    d, warnings = copilot.validate({
+        "name": "x", "trigger": {"type": "unknown"}, "actions": [{"type": "touch.email", "delay_minutes": 999999}],
+        "cooldown_hours": 0, "verify_window_hours": -5,
+    })
+    assert d["trigger"]["type"] == "event" and d["trigger"]["name"] == "page_view"
+    assert d["cooldown_hours"] >= 1 and d["verify_window_hours"] >= 0
+    assert d["actions"][0]["delay_minutes"] <= 60 * 24 * 30
+    assert any("不支持" in w for w in warnings)
+
+    d2, w2 = copilot.validate({"trigger": {"type": "event", "name": "signup"}, "actions": []})
+    assert d2["actions"][0]["type"] == "ai.compose"   # 无合法动作 → 补不外发草稿
+    assert any("无合法动作" in w for w in w2)
+
+
+async def test_copilot_apply_as_draft(store: Store) -> None:
+    from userloop.ai import copilot
+
+    draft, _ = copilot.validate({"name": "测试流程", "trigger": {"type": "event", "name": "purchase"},
+                                 "actions": [{"type": "touch.email", "payload": {"subject": "s"}}]})
+    out = await copilot.apply_loop(store, draft, enable=False)
+    assert out["ok"] and out["enabled"] is False
+    saved = await store.get_templates(enabled_only=False)
+    assert any(t["id"] == out["id"] and t["enabled"] is False for t in saved)
+    # 未启用 → 不参与匹配
+    assert not any(t["id"] == out["id"] for t in await store.get_templates(enabled_only=True))

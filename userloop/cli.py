@@ -222,6 +222,40 @@ def db_migrate_events(data_dir: str | None, keep_sqlite: bool) -> None:
 
 
 @main.command()
+@click.argument("prompt")
+@click.option("--data-dir", default=None)
+@click.option("--apply", "do_apply", is_flag=True, help="落库为草稿模板（默认只预览）")
+@click.option("--enable", is_flag=True, help="落库并立即启用")
+def copilot(prompt: str, data_dir: str | None, do_apply: bool, enable: bool) -> None:
+    """Copilot：用一句话生成运营 Loop（--apply 落库，--enable 立即生效）。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.ai import copilot as cp
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        try:
+            res = await cp.draft_loop(ctx, prompt)
+            if not res.get("ok"):
+                console.print(f"[red]生成失败：{res.get('error')}[/]")
+                return
+            console.print_json(json.dumps(res["draft"], ensure_ascii=False))
+            for w in res.get("warnings") or []:
+                console.print(f"[yellow]warn[/] {w}")
+            if do_apply or enable:
+                out = await cp.apply_loop(store, res["draft"], enable=enable)
+                console.print(f"已落库：{out['id']}（enabled={out['enabled']}）")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@main.command()
 @click.option("--data-dir", default=None)
 def stats(data_dir: str | None) -> None:
     """查看运营看板摘要。"""
