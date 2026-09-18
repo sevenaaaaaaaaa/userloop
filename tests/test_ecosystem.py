@@ -178,3 +178,28 @@ async def test_attribution_counts_each_event_once(store: Store) -> None:
     n = await store.events.count_matching_any([("utm_campaign", "cmp-9"), ("url", "https://x/9")],
                                               "2026-09-01T00:00:00Z", "2026-09-16T00:00:00Z")
     assert n == 1
+
+
+def test_websflow_page_includes_track_back() -> None:
+    """UserLoop 生成的 WebsFlow 页应注入回传脚本（tracking.custom 官方扩展点）。"""
+    from userloop.touch import websflow
+
+    data = websflow.build_page_data("T", "B", "C", "https://x/go", ul_base="https://nownexts.com/userloop",
+                                    track_back=True)
+    custom = data["global"]["tracking"]["custom"]
+    assert "track.js" in custom and "wf_vid" in custom and "visitor_id" in custom
+    # 关闭时不注入
+    data2 = websflow.build_page_data("T", "B", "C", "https://x/go", ul_base="https://ul", track_back=False)
+    assert "global" not in data2
+
+
+def test_mflow_publish_token_protection(tmp_path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"api_token": "tk1", "storage": {}}), encoding="utf-8")
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        assert client.post("/api/v1/hub/mflow/publish", json={"item_id": "x"}).status_code == 401
+        r = client.post("/api/v1/hub/mflow/publish?token=tk1", json={"item_id": "x", "title": "T"}).json()
+        assert r["ok"]
