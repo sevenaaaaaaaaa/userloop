@@ -117,7 +117,7 @@ table tr:hover td{background:var(--hover)}
 table tr:last-child td{border-bottom:none}
 /* 短字段（阶段/状态/时间等）不换行；长文本列默认换行，加 .wrap 允许任意断行 */
 table td.nw{white-space:nowrap}
-table td.wrap{white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:140px}
+table td.wrap{white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:96px}
 table td.wrap .mono{white-space:normal;overflow-wrap:anywhere}
 table td.ellip{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 长文本折叠（悬停 title 看全文） */
