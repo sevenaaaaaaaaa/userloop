@@ -149,6 +149,18 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS touch_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    template_id TEXT,
+    loop_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_touchlog_user ON touch_log(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_touchlog_channel ON touch_log(channel, created_at);
+
 CREATE TABLE IF NOT EXISTS touch_pages (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -639,15 +651,23 @@ class Store:
         cur = await self.db.execute("SELECT type, value FROM identities WHERE user_id=?", (user_id,))
         return {r["type"]: r["value"] for r in await cur.fetchall()}
 
+    async def log_touch(self, user_id: str, channel: str, action_type: str,
+                        template_id: str | None = None, loop_id: str | None = None) -> None:
+        """触点台账：每次真实投递记一笔（Canvas / 模板 Loop / AI 决策 / 直连都走这里）。"""
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO touch_log (user_id, channel, action_type, template_id, loop_id, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (user_id, channel, action_type, template_id, loop_id, iso_now()),
+        )
+
     async def recent_touches(self, user_id: str, hours: int = 168) -> list[dict]:
-        """窗口内已执行的触达明细（含动作类型/时间），供跨渠道频控与渠道选择使用。"""
+        """窗口内已投递的触达明细（读台账，含渠道/模板/时间），供频控与渠道选择使用。"""
         assert self.db
         since = (datetime.utcnow() - timedelta(hours=hours)).isoformat(timespec="seconds") + "Z"
         cur = await self.db.execute(
-            "SELECT a.id, a.type, a.executed_at, a.loop_id, l.template_id "
-            "FROM actions a JOIN loops l ON a.loop_id = l.id "
-            "WHERE l.user_id=? AND a.executed_at>=? AND a.status IN ('done','dispatched') "
-            "ORDER BY a.executed_at DESC", (user_id, since))
+            "SELECT id, channel, action_type AS type, created_at AS executed_at, loop_id, template_id "
+            "FROM touch_log WHERE user_id=? AND created_at>=? ORDER BY created_at DESC", (user_id, since))
         return [dict(r) for r in await cur.fetchall()]
 
     async def channel_engagement(self, days: int = 30) -> dict[str, dict[str, int]]:

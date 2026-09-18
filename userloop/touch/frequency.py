@@ -93,7 +93,7 @@ async def check(store: Store | None, ctx: ExecutorContext, user: dict, channel: 
     per_channel: dict[str, int] = {}
     last_by_channel: dict[str, str] = {}
     for r in rows:
-        ch = channel_of(r["type"])
+        ch = r.get("channel") or channel_of(r["type"])
         per_channel[ch] = per_channel.get(ch, 0) + 1
         if ch not in last_by_channel:
             last_by_channel[ch] = r["executed_at"]
@@ -136,3 +136,11 @@ async def check(store: Store | None, ctx: ExecutorContext, user: dict, channel: 
     return {"ok": True, "reason": "ok",
             "counts": {"week_total": week_total, "per_channel": per_channel,
                        "remaining_week": max(0, int(cfg["weekly_cap"]) - week_total)}}
+
+
+async def record(store: Store | None, user: dict, channel: str, action_type: str,
+                 template_id: str | None = None, loop_id: str | None = None) -> None:
+    """投递成功后记台账（营销渠道才记；事务类也记但不占营销配额由 check 判断）。"""
+    if store is None or channel not in MARKETING_CHANNELS:
+        return
+    await store.log_touch(user["id"], channel, action_type, template_id=template_id, loop_id=loop_id)
