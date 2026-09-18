@@ -216,6 +216,10 @@ async def run_for_user(
     # 1) 前置护栏：频控 / 静默期 / 预算
     gate = await G.precheck(store, ctx, user, force=force)
     if not gate["ok"]:
+        try:
+            await store.log_block(user["id"], "ai", f"AI 护栏：{gate['reason']}")
+        except Exception:  # noqa: BLE001
+            pass
         return await _audit(store, user, {
             "intent": "noop", "reasoning": gate["reason"], "confidence": 1.0,
             "status": "skipped", "risk": "low", "channel": "none",
@@ -283,6 +287,13 @@ async def execute_intent(
         {"reasoning": decision.get("reasoning"), "expected_effect": decision.get("expected_effect")})
     if loop:
         await process_due_actions(store, ctx)  # 即期动作执行
+    else:
+        # 模板冷却期内（避免重复触达）——同样计入"少打扰"
+        try:
+            await store.log_block(user["id"], spec.get("channel", "unknown") if isinstance(spec, dict) else "unknown",
+                                  "模板冷却期内")
+        except Exception:  # noqa: BLE001
+            pass
     return loop
 
 
