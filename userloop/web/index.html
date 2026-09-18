@@ -71,6 +71,10 @@
       事件流
     </a>
     <div class="sb-grp">实验与编排</div>
+    <a class="nv" href="#sec-report" data-sec="sec-report">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h5M9 8h4"/></svg>
+      运营周报
+    </a>
     <a class="nv" href="#sec-ab" data-sec="sec-ab">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h6v6H4zM14 13h6v6h-6z"/><path d="M10 8h4v8h-4z"/></svg>
       A/B 实验
@@ -175,6 +179,8 @@
           <h3>AI 运营大脑 · 下一步最佳动作</h3>
           <span class="p-sub" id="ai-sub">全生命周期决策 · 频控 + 风险门 + 审计</span>
           <button class="btn primary sm" onclick="aiDecide()">▶ 立即决策一批</button>
+          <button class="btn ghost sm" onclick="aiBatchApprove()">✓ 批量批准待批</button>
+          <button class="btn ghost sm" onclick="aiBatchReject()">✕ 批量驳回</button>
         </div>
         <div class="p-body">
           <table><thead><tr><th>时间</th><th>用户</th><th>阶段</th><th>意图</th><th>风险/状态</th><th>理由</th><th>置信</th><th>操作</th></tr></thead><tbody id="ai"></tbody></table>
@@ -190,6 +196,19 @@
         </div>
         <div class="p-body">
           <table><thead><tr><th>实验</th><th>渠道</th><th>指标</th><th>变体</th><th>送达</th><th>打开率</th><th>点击率</th><th>转化率</th><th>结论</th><th>操作</th></tr></thead><tbody id="ab"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-report">
+      <div class="panel">
+        <div class="p-head">
+          <h3>运营周报（AI 叙事 + 硬指标）</h3>
+          <span class="p-sub" id="rpSub">每周一 09:00 自动生成；也可随时手动</span>
+          <button class="btn primary sm" onclick="rpGenerate()">生成周报</button>
+        </div>
+        <div class="p-body" id="rpBody" style="line-height:1.9;font-size:var(--fs-lg)">
+          <div style="color:var(--faint)">加载中…</div>
         </div>
       </div>
     </section>
@@ -377,6 +396,32 @@ function render(r){
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
 }
 
+async function aiBatchApprove(){
+  if (!confirm('批量批准所有「中风险」待批决策并立即执行？')) return;
+  toast('批量批准中…');
+  const r = await (await fetch('api/v1/ai/approve-batch', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({risk:'medium', limit:50})})).json();
+  toast(`已批准 ${r.approved} · 被频控拦下 ${r.blocked} · 失败 ${r.failed}`);
+  load(true);
+}
+async function aiBatchReject(){
+  if (!confirm('驳回所有待批决策？')) return;
+  const r = await (await fetch('api/v1/ai/reject-batch', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({limit:100})})).json();
+  toast(`已驳回 ${r.rejected}`); load(true);
+}
+async function rpLoad(){
+  const el = document.getElementById('rpBody');
+  el.innerHTML = await (await fetch('api/v1/reports/latest')).text();
+}
+async function rpGenerate(){
+  const el = document.getElementById('rpBody');
+  el.innerHTML = '<div style="color:var(--faint)">AI 生成中…</div>';
+  const r = await (await fetch('api/v1/reports/generate', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({days:7})})).json();
+  toast(r.ok ? `已生成 ${r.name}${r.degraded ? '（叙事降级）' : ''}` : '生成失败');
+  rpLoad();
+}
 async function cpDraft(){
   const prompt = $('cpPrompt').value.trim();
   if (!prompt) { toast('先写一句需求'); return; }
@@ -437,6 +482,7 @@ document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.addEventListen
 syncNav();
 load();
 schedule();
+rpLoad();
 </script>
 </body>
 </html>

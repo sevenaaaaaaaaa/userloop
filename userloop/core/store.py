@@ -149,6 +149,15 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS touch_blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_created ON touch_blocks(created_at);
+
 CREATE TABLE IF NOT EXISTS touch_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
@@ -204,6 +213,7 @@ CREATE TABLE IF NOT EXISTS ai_decisions (
     payload TEXT,
     loop_id TEXT,
     model TEXT,
+    error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -249,6 +259,12 @@ class Store:
         await self.db.execute("PRAGMA wal_autocheckpoint=512")
         await self.db.executescript(SCHEMA)
         await self.db.commit()
+        # 存量库幂等补列（CREATE TABLE IF NOT EXISTS 不会新增列）
+        for ddl in ("ALTER TABLE ai_decisions ADD COLUMN error TEXT",):
+            try:
+                await self.db.execute(ddl)
+            except aiosqlite.Error:
+                pass
         # events 分层存储（Tier1 SQLite / Tier2 MySQL），失败自动降级
         from userloop.core.eventstore import build_event_store
 
@@ -660,6 +676,26 @@ class Store:
             "VALUES (?,?,?,?,?,?)",
             (user_id, channel, action_type, template_id, loop_id, iso_now()),
         )
+
+    async def log_block(self, user_id: str, channel: str, reason: str) -> None:
+        """记录一次"被门禁拦下的打扰"（周报的体验指标：本周少打扰了多少次）。"""
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO touch_blocks (user_id, channel, reason, created_at) VALUES (?,?,?,?)",
+            (user_id, channel, reason[:120], iso_now()),
+        )
+
+    async def block_stats(self, days: int = 7) -> dict[str, Any]:
+        """窗口内拦截统计：总数 + 按渠道 + 按原因分类。"""
+        assert self.db
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat(timespec="seconds") + "Z"
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c FROM touch_blocks WHERE created_at>=?", (since,))
+        total = int((await cur.fetchone())["c"])
+        cur = await self.db.execute(
+            "SELECT channel, COUNT(*) c FROM touch_blocks WHERE created_at>=? GROUP BY channel", (since,))
+        by_channel = {r["channel"]: r["c"] for r in await cur.fetchall()}
+        return {"total": total, "by_channel": by_channel}
 
     async def recent_touches(self, user_id: str, hours: int = 168) -> list[dict]:
         """窗口内已投递的触达明细（读台账，含渠道/模板/时间），供频控与渠道选择使用。"""

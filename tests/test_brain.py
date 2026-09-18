@@ -189,3 +189,58 @@ def test_copilot_json_lenient_parse() -> None:
     assert _loads_lenient('好的，这是结果：{"a":3} 希望有帮助') == {"a": 3}
     assert _loads_lenient('not json at all') is None
     assert _loads_lenient('') is None
+
+
+# ── 批量审批 ──
+
+def test_batch_approve_and_reject(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        r = client.post("/api/v1/ai/approve-batch", json={"risk": "medium", "limit": 5}).json()
+        assert set(r) >= {"approved", "blocked", "failed", "picked"}
+        r2 = client.post("/api/v1/ai/reject-batch", json={"limit": 5}).json()
+        assert "rejected" in r2
+
+
+def test_batch_approve_executes_and_handles_frequency(tmp_path) -> None:
+    """批量批准：正常执行记为 approved；被频控拦下记为 blocked（不无限重试）。"""
+    import asyncio
+
+    from userloop.core.store import Store
+
+    async def _run() -> None:
+        from userloop.server.app import create_app
+        from fastapi.testclient import TestClient
+
+        app = create_app(str(tmp_path))
+        with TestClient(app) as client:
+            store = Store(str(tmp_path / "userloop.db"), {})
+            await store.connect()
+            try:
+                u = await store.upsert_user("ba1", email="ba1@x.com")
+                await store.update_user(u["id"], stage="activated")
+                # 造两条待批决策：一条可执行（低干扰），一条会被频控（同一用户已触达）
+                for i in range(2):
+                    await store.insert_ai_decision({
+                        "id": f"ai_test_{i}", "user_id": u["id"], "stage": "activated",
+                        "intent": "send_email", "channel": "email", "risk": "medium",
+                        "status": "pending_approval", "reasoning": "test", "confidence": 0.8,
+                        "payload": {"type": "touch.email", "payload": {"subject": "s", "text": "b",
+                                                                       "cta_text": "c", "cta_url": "https://x"}},
+                        "topic": "t"})
+                # 先记一条触达 → 后续会被全局间隔拦
+                await store.log_touch(u["id"], "email", "touch.email", "tpl", "l")
+                r = client.post("/api/v1/ai/approve-batch", json={"limit": 10}).json()
+                assert r["picked"] == 2
+                assert r["blocked"] >= 1        # 频控拦下一次
+                decisions = await store.list_ai_decisions(limit=10)
+                statuses = {d["status"] for d in decisions}
+                assert "blocked" in statuses or "approved" in statuses
+            finally:
+                await store.close()
+
+    asyncio.run(_run())

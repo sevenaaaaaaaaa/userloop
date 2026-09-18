@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -613,6 +614,70 @@ def create_app(data_dir: str | None = None) -> Any:
         await store.update_ai_decision(decision_id, status="approved", loop_id=loop["id"] if loop else None)
         return JSONResponse({"ok": True, "loop_id": loop["id"] if loop else None})
 
+    @app.post(f"{prefix}/api/v1/ai/approve-batch")
+    async def ai_approve_batch(request: Request) -> JSONResponse:
+        """批量批准待批决策（按风险/意图/阶段筛选，逐条执行并回报结果）。"""
+        from userloop.ai import brain as brain_mod
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        risk = str(body.get("risk") or "medium")
+        intent = str(body.get("intent") or "")
+        stage = str(body.get("stage") or "")
+        limit = max(1, min(int(body.get("limit") or 20), 100))
+        ids = set(body.get("ids") or [])
+
+        rows = await store.list_ai_decisions(status="pending_approval", limit=200)
+        picked = [r for r in rows
+                  if (not ids or r["id"] in ids)
+                  and (not risk or r.get("risk") == risk)
+                  and (not intent or r.get("intent") == intent)
+                  and (not stage or r.get("stage") == stage)][:limit]
+
+        results, approved, blocked, failed = [], 0, 0, 0
+        for rec in picked:
+            user = await store.get_user(rec["user_id"])
+            if not user:
+                await store.update_ai_decision(rec["id"], status="failed")
+                failed += 1
+                continue
+            payload = pj(rec.get("payload"), {}) or {}
+            loop = await brain_mod.execute_intent(store, ctx, user, rec["intent"],
+                                                  {"reasoning": rec.get("reasoning"),
+                                                   "expected_effect": rec.get("expected_effect")},
+                                                  payload=payload)
+            actions = await store.actions_for_loop(loop["id"]) if loop else []
+            blocked_by = next((a for a in actions if a["status"] == "failed" and "频控" in str(a.get("result") or "")), None)
+            if loop and blocked_by is None:
+                await store.update_ai_decision(rec["id"], status="approved", loop_id=loop["id"])
+                approved += 1
+                results.append({"id": rec["id"], "status": "approved", "loop_id": loop["id"]})
+            else:
+                # 频控/落库失败：标记 blocked，避免无限重试
+                await store.update_ai_decision(rec["id"], status="blocked",
+                                               error="frequency/execute blocked")
+                blocked += 1
+                results.append({"id": rec["id"], "status": "blocked"})
+        return JSONResponse({"approved": approved, "blocked": blocked, "failed": failed,
+                             "picked": len(picked), "results": results})
+
+    @app.post(f"{prefix}/api/v1/ai/reject-batch")
+    async def ai_reject_batch(request: Request) -> JSONResponse:
+        """批量驳回待批决策。"""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        ids = set(body.get("ids") or [])
+        limit = max(1, min(int(body.get("limit") or 50), 200))
+        rows = await store.list_ai_decisions(status="pending_approval", limit=200)
+        picked = [r for r in rows if (not ids or r["id"] in ids)][:limit]
+        for rec in picked:
+            await store.update_ai_decision(rec["id"], status="rejected")
+        return JSONResponse({"rejected": len(picked)})
+
     @app.post(f"{prefix}/api/v1/ai/decisions/{{decision_id}}/reject")
     async def ai_reject(decision_id: str) -> JSONResponse:
         rec = await store.get_ai_decision(decision_id)
@@ -686,6 +751,49 @@ def create_app(data_dir: str | None = None) -> Any:
             raise HTTPException(status_code=400, detail="draft 无效（缺少 actions）")
         return JSONResponse(await copilot.apply_loop(store, draft, enable=bool(body.get("enable"))))
 
+    # ---- 运营周报 ----
+
+    @app.get(f"{prefix}/api/v1/reports")
+    async def reports_list() -> JSONResponse:
+        import glob
+        import os
+
+        out_dir = os.path.join(cfg["data_dir"], "reports")
+        items = []
+        for path in sorted(glob.glob(os.path.join(out_dir, "*.md")), reverse=True)[:20]:
+            items.append({"name": os.path.basename(path),
+                          "size": os.path.getsize(path),
+                          "mtime": os.path.getmtime(path)})
+        return JSONResponse({"count": len(items), "reports": items})
+
+    @app.get(f"{prefix}/api/v1/reports/latest", response_class=HTMLResponse)
+    async def reports_latest() -> HTMLResponse:
+        import glob
+        import os
+
+        out_dir = os.path.join(cfg["data_dir"], "reports")
+        files = sorted(glob.glob(os.path.join(out_dir, "*.md")), reverse=True)
+        if not files:
+            return HTMLResponse("<div style='color:var(--faint)'>暂无周报（点「生成周报」）</div>")
+        with open(files[0], encoding="utf-8") as f:
+            md = f.read()
+        return HTMLResponse(_md_to_html(md))
+
+    @app.post(f"{prefix}/api/v1/reports/generate")
+    async def reports_generate(request: Request) -> JSONResponse:
+        from userloop.ai import reporter
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        rep = await reporter.build(store, ctx, days=int(body.get("days") or 7))
+        path = await reporter.save(store, ctx, rep)
+        sent = await reporter.send(ctx, rep) if body.get("send") else {}
+        return JSONResponse({"ok": True, "name": rep["name"], "path": path,
+                             "degraded": rep["degraded"], "sent": sent,
+                             "markdown": rep["markdown"][:4000]})
+
     # ---- 运维 API ----
 
     @app.post(f"{prefix}/api/v1/ops/run-tick")
@@ -716,6 +824,31 @@ def create_app(data_dir: str | None = None) -> Any:
             return _page("canvas.html")
 
     return app
+
+
+def _md_to_html(md: str) -> str:
+    """极简 Markdown 渲染（标题/列表/粗体/引用），避免引入依赖。"""
+    import html as _html
+
+    out: list[str] = []
+    for line in md.splitlines():
+        s = _html.escape(line)
+        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+        if s.startswith("### "):
+            out.append(f"<h3 style='font-size:14px;margin:14px 0 6px'>{s[4:]}</h3>")
+        elif s.startswith("## "):
+            out.append(f"<h2 style='font-size:15px;margin:16px 0 8px'>{s[3:]}</h2>")
+        elif s.startswith("# "):
+            out.append(f"<h1 style='font-size:17px;margin:0 0 8px'>{s[2:]}</h1>")
+        elif s.startswith("&gt; "):
+            out.append(f"<div style='border-left:3px solid var(--warn);padding-left:10px;margin:8px 0;color:var(--warn)'>{s[5:]}</div>")
+        elif s.startswith("- "):
+            out.append(f"<div style='margin:4px 0'>• {s[2:]}</div>")
+        elif s.strip() in ("---", ""):
+            out.append("<div style='height:8px'></div>")
+        else:
+            out.append(f"<div style='margin:6px 0'>{s}</div>")
+    return "".join(out)
 
 
 def _require_token(request: Request, cfg: dict) -> None:

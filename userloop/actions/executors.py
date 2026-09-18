@@ -220,6 +220,11 @@ async def execute_action(
                        "note": gate["reason"], "frequency": gate.get("counts") or {}}
             ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
                               "subject": "", "text": "", **blocked})
+            if store is not None:
+                try:
+                    await store.log_block(user.get("id", ""), channel, gate["reason"])
+                except Exception:  # noqa: BLE001
+                    pass
             return blocked
 
     result = await _execute_action(ctx, action, loop, user)

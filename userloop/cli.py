@@ -257,6 +257,35 @@ def copilot(prompt: str, data_dir: str | None, do_apply: bool, enable: bool) -> 
 
 @main.command()
 @click.option("--data-dir", default=None)
+@click.option("--days", default=7, help="统计窗口天数")
+@click.option("--send", is_flag=True, help="生成后推送（飞书/邮件，需在配置中开启）")
+def report(data_dir: str | None, days: int, send: bool) -> None:
+    """生成运营周报（AI 叙事 + 硬指标附录）。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.ai import reporter
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        try:
+            rep = await reporter.build(store, ctx, days=days)
+            path = await reporter.save(store, ctx, rep)
+            console.print(f"[green]已生成：[/]{path}" + ("[yellow]（AI 叙事降级）[/]" if rep["degraded"] else ""))
+            console.print(rep["markdown"][:1500])
+            if send:
+                console.print(f"推送结果：{await reporter.send(ctx, rep)}")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@main.command()
+@click.option("--data-dir", default=None)
 def stats(data_dir: str | None) -> None:
     """查看运营看板摘要。"""
 
