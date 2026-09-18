@@ -219,3 +219,47 @@ async def test_transactional_does_not_consume_quota(tmp_path) -> None:
         assert (await frequency.check(store, ctx, u, "email", "tpl"))["ok"] is True
     finally:
         await store.close()
+
+
+async def test_touch_auto_records_resolved_channel(tmp_path) -> None:
+    """touch.auto 成功后应按**解析出的真实渠道**记账，使后续触达被频控拦住。"""
+    import httpx
+
+    store = Store(str(tmp_path / "arct.db"), {})
+    await store.connect()
+    try:
+        u = await store.upsert_user("arc1", email="arc1@x.com")
+
+        def handler(request):  # type: ignore[no-untyped-def]
+            return httpx.Response(200, json={"ok": True, "ref": "m1"})
+
+        ctx = ExecutorContext(str(tmp_path), {
+            "touch": {"frequency": {"enabled": True, "quiet_hours": [0, 0], "global_gap_hours": 24},
+                      "email": {"driver": "openflow", "bridge_url": "http://of.test", "bridge_token": "t"}},
+            "integrations": {"openflow": {"base_url": "http://of.test", "bridge_token": "t"}},
+            "api_token": "x"})
+        ctx.store = store
+        import userloop.touch.drivers as drv
+        real = httpx.AsyncClient
+
+        class Patched(real):
+            def __init__(self, *a, **kw):
+                kw["transport"] = httpx.MockTransport(handler)
+                super().__init__(*a, **kw)
+
+        orig = drv.httpx.AsyncClient
+        drv.httpx.AsyncClient = Patched                      # type: ignore[assignment]
+        try:
+            r1 = await execute_action(ctx, {"type": "touch.auto",
+                                            "payload": {"intent": "reengage", "title": "t", "text": "b"}},
+                                      {"id": "l1", "template_id": "tpl"}, u)
+            assert r1["ok"] and r1["channel"] == "email"
+            rows = await store.recent_touches(u["id"], hours=24)
+            assert len(rows) == 1 and rows[0]["channel"] == "email", rows
+            r2 = await execute_action(ctx, {"type": "touch.sms", "payload": {"text": "x"}},
+                                      {"id": "l2", "template_id": "tpl"}, u)
+            assert r2.get("blocked_by_frequency") is True
+        finally:
+            drv.httpx.AsyncClient = orig                     # type: ignore[assignment]
+    finally:
+        await store.close()
