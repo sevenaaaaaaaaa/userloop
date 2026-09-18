@@ -125,12 +125,15 @@ def current_store() -> Any:
 
 
 def tenant_config(base_cfg: dict, tenant: dict) -> dict:
-    """把租户记录合成为 Store 配置（独立 data_dir + 可选独立事件存储）。"""
+    """把租户记录合成为 Store 配置（独立 data_dir + 租户自己的事件存储）.
+
+    **隔离要点**：新租户绝不继承基础配置的事件存储（否则会串进主租户的库）；
+    默认用本租户 data_dir 下的 SQLite，需要 MySQL 时在租户记录里显式声明 storage。
+    """
     cfg = dict(base_cfg)
     cfg["data_dir"] = tenant.get("data_dir") or base_cfg["data_dir"]
     cfg["db_path"] = os.path.join(cfg["data_dir"], "userloop.db")
-    if tenant.get("storage"):
-        cfg["storage"] = tenant["storage"]
+    cfg["storage"] = tenant.get("storage") or {}     # 不回落 base_cfg（防串库）
     cfg["tenant"] = tenant.get("id")
     cfg["locale"] = tenant.get("locale") or "zh-CN"
     cfg["timezone_offset"] = int(tenant.get("timezone_offset") or 8)
