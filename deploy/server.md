@@ -52,6 +52,12 @@
 - **H5/落地页**：经 **WebsFlow 后台** `https://nownexts.com/webflow/api`（服务账号 `userloop-bot@nownexts.com`，凭据 `data/websflow-bot.txt` 600）；公网页 `/webflow/p/<token>`
 - **短信**：`touch.sms.provider` ∈ aliyun|tencent|webhook，现值 `enabled=false`（填 AK/SK + 报备签名模板即生效）
 - **MFlow（长内容）**：线上 API `https://nownexts.com/mflow`（服务账号 `userloop-bot`/operator，凭据 `data/mflow-bot.txt` 600）；`create_content` 建 item + 入队，MFlow agent 自产稿并推进状态机
+- **多租户**：注册表 `data/tenants.json`；每租户独立目录 `data/tenants/<id>/`（含独立 SQLite 与事件存储；
+  **新租户默认不继承主租户 MySQL 事件库**，防串库）；管理 API `/api/v1/tenants`（列表/创建/切换/修改），
+  管理员可切任意租户，普通用户仅限自己被分配的租户；调度任务按租户遍历。当前线上：`main`(zh-CN, MySQL) +
+  `acme`(en-US, SQLite，演示租户，可删)
+- **i18n**：`userloop/i18n/{zh-CN,en-US}.json`；语言解析优先级：显式 `?lang=`/`X-Locale` > 用户 props.locale >
+  租户 locale > Accept-Language > 默认 zh-CN；控制台右上「中/EN」切换
 - **识别/合规/预测**：`POST /userloop/api/v1/identify`、`/api/v1/compliance/{consent,export,erase}`、
   `/api/v1/predictions/*`、`/api/v1/segments/nl`；H5 留资表单（`touch.lead_capture.enabled`）
 - **回执**：邮件 `email_open/email_click/email_unsubscribed`、H5 `h5_view/h5_click` → 事件总线 → 旅程/验证回流
