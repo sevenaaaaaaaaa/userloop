@@ -275,7 +275,8 @@ def create_app(data_dir: str | None = None) -> Any:
                            "metric": _ab.cfg_of(exp)["metric"], "promoted_variant": exp.get("promoted_variant"),
                            "variants": [{"id": v["id"], "name": v.get("name")} for v in (exp.get("variants") or [])],
                            "metrics": await _ab.metrics(store, exp), "verdict": verdict})
-        data = {"counts": counts, "stages": stages, "funnel": _funnel(stages),
+        data = {"channels": await store.channel_engagement(days=30), "counts": counts,
+                "stages": stages, "funnel": _funnel(stages),
                 "loop_status": loop_status, "template_stats": template_stats,
                 "recent_transitions": transitions, "loops": loops_out,
                 "events": events, "users": users,

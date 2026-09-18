@@ -1,4 +1,12 @@
-"""触点调度：把 `touch.<channel>` 动作交给驱动注册表执行（统一结果结构）."""
+"""触点调度：把 `touch.<channel>` 动作交给驱动注册表执行（统一结果结构）.
+
+执行顺序（每一步都可解释、可拦下）：
+  1. 解析 channel（`touch.auto` → Next Best Channel 按意图选渠道）
+  2. **跨渠道全局频控门**（template Loop 与 AI 决策共用）
+  3. A/B 版式实验（稳定分桶 → 覆盖内容槽位）
+  4. **发前质检门**（block 拦下 / warn 放行）
+  5. 驱动交付（失败降级）
+"""
 
 from __future__ import annotations
 
@@ -20,18 +28,42 @@ async def dispatch(ctx: Any, action: dict, loop: dict, user: dict, store: Any = 
             payload = json.loads(payload)
         except Exception:  # noqa: BLE001
             payload = {}
+    if store is not None and not hasattr(ctx, "store"):
+        ctx.store = store  # 驱动与选择器按身份挑渠道
+
+    # 1) Next Best Channel：touch.auto 按意图自动挑渠道（可解释）
+    auto_info: dict[str, Any] | None = None
+    if channel == "auto":
+        from userloop.touch import select as sel
+
+        identities = await store.of_user_identities(user["id"]) if store is not None else {}
+        auto_info = await sel.score(store, user, identities, ctx, intent=str(payload.get("intent") or "default"))
+        if not auto_info.get("channel"):
+            return {"type": atype, "channel": "auto", "ok": False,
+                    "note": auto_info.get("rationale"), "selector": auto_info}
+        channel = auto_info["channel"]
 
     driver = get(channel)
     if driver is None:
-        return {"ok": False, "type": atype, "channel": channel,
-                "error": f"未注册的触点渠道：{channel}（可用：{', '.join(c.channel for c in __import__('userloop.touch.base', fromlist=['_REGISTRY'])._REGISTRY.values())}）"}
+        from userloop.touch.base import _REGISTRY
+
+        return {"type": atype, "channel": channel, "ok": False,
+                "error": f"未注册的触点渠道：{channel}（可用：{', '.join(_REGISTRY)}）"}
 
     spec = TouchSpec.from_payload(payload, channel, loop,
                                   template_id=str(payload.get("template_id") or loop.get("template_id") or ""))
-    if store is not None and not hasattr(ctx, "store"):
-        ctx.store = store  # 驱动里按身份挑渠道标识
 
-    # A/B 版式实验：稳定分桶 → 覆盖内容槽位（闭环：已 promote 则只发 winner）
+    # 2) 跨渠道全局频控门
+    from userloop.touch import frequency as freq_mod
+
+    gate = await freq_mod.check(store, ctx, user, channel, template_id=spec.template_id,
+                                force=bool(payload.get("force")))
+    if not gate["ok"]:
+        return {"type": atype, "channel": channel, "ok": False, "blocked_by_frequency": True,
+                "note": gate["reason"], "frequency": gate.get("counts") or {},
+                **({"selector": auto_info} if auto_info else {})}
+
+    # 3) A/B 版式实验：稳定分桶 → 覆盖内容槽位（已 promote 则只发 winner）
     ab: dict[str, Any] | None = None
     if store is not None:
         try:
@@ -47,13 +79,13 @@ async def dispatch(ctx: Any, action: dict, loop: dict, user: dict, store: Any = 
         except Exception:  # noqa: BLE001 —— 实验异常不得影响正常交付
             ab = None
 
-    # 发前质检门（保护终端用户体验与发件声誉）
+    # 4) 发前质检门（保护终端用户体验与发件声誉）
     last_qc: dict = {}
     qc_cfg = (ctx.config.get("touch") or {}).get("qc") or {}
     if qc_cfg.get("enabled", True):
         from userloop.touch import qc as qc_mod
 
-        if channel in ("email",):
+        if channel == "email":
             from userloop.touch.render import render_email
 
             rendered = render_email(spec, user, ctx.config)
@@ -65,14 +97,18 @@ async def dispatch(ctx: Any, action: dict, loop: dict, user: dict, store: Any = 
             return {"type": atype, "channel": channel, "ok": False, "blocked_by_qc": True,
                     "spec": {"title": spec.title, "cta": spec.cta_text},
                     "note": "发前质检未通过：" + "；".join(i["message"] for i in verdict["blocking"][:3]),
-                    "qc": verdict}
+                    "qc": verdict, **({"selector": auto_info} if auto_info else {})}
         last_qc = verdict
 
+    # 5) 交付
     result = await driver.deliver(spec, user, ctx)
     out = {"type": atype, "channel": channel, "spec": {"title": spec.title, "cta": spec.cta_text}}
-    if last_qc.get("warnings"):
-        out["qc"] = {"warnings": last_qc["warnings"]}
+    if auto_info:
+        out["selector"] = {"chosen": auto_info["channel"], "rationale": auto_info["rationale"],
+                           "scores": auto_info.get("scores")}
     if ab:
         out["ab"] = ab
+    if last_qc.get("warnings"):
+        out["qc"] = {"warnings": last_qc["warnings"]}
     out.update(result.as_dict())
     return out
