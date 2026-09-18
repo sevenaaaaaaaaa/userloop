@@ -951,6 +951,12 @@ def create_app(data_dir: str | None = None) -> Any:
 
         return JSONResponse(await evo.apply_proposal(store, ctx, proposal_id))
 
+    @app.post(f"{prefix}/api/v1/evolve/proposals/{{proposal_id}}/rollback")
+    async def evolve_rollback(proposal_id: str) -> JSONResponse:
+        from userloop.evolve import engine as evo
+
+        return JSONResponse(await evo.rollback_proposal(store, ctx, proposal_id))
+
     @app.post(f"{prefix}/api/v1/evolve/proposals/{{proposal_id}}/reject")
     async def evolve_reject(proposal_id: str) -> JSONResponse:
         await store.set_evolution_status(proposal_id, "rejected")
