@@ -80,6 +80,10 @@
       事件流
     </a>
     <div class="sb-grp">实验与编排</div>
+    <a class="nv" href="#sec-eco" data-sec="sec-eco">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7l3 3M17 7l-3 3M7 17l3-3M17 17l-3-3"/></svg>
+      生态互联
+    </a>
     <a class="nv" href="#sec-evolve" data-sec="sec-evolve">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/><path d="M12 8v4l3 2"/></svg>
       自进化
@@ -258,6 +262,21 @@
       </div>
     </section>
 
+    <section id="sec-eco">
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>inFlow 洞察 → Loop</h3><span class="p-sub">情报自动变动作（草稿待启用）</span>
+            <button class="btn primary sm" onclick="ecoInflowSync()">立即同步</button></div>
+          <div class="p-body"><table><thead><tr><th>洞察</th><th>级别</th><th>生成的 Loop</th><th>操作</th></tr></thead><tbody id="ecoInsights"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>MFlow 内容回流</h3><span class="p-sub">发布 → 验证窗口 → 效果回流</span>
+            <button class="btn ghost sm" onclick="ecoVerify()">检查到期</button></div>
+          <div class="p-body"><table><thead><tr><th>内容</th><th>发布</th><th>窗口</th><th>结论</th></tr></thead><tbody id="ecoPubs"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
     <section id="sec-evolve">
       <div class="panels p2">
         <div class="panel">
@@ -317,7 +336,8 @@ function toggleLang(){
   const next = currentLang() === 'zh-CN' ? 'en-US' : 'zh-CN';
   try { localStorage.setItem('ul_lang', next); } catch(e){}
   applyLang();
-evoLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
+evoLoad();
+ecoLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
 }
 function applyLang(){
   const dict = UL_I18N[currentLang()] || UL_I18N['zh-CN'];
@@ -521,6 +541,38 @@ function render(r){
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
 }
 
+async function ecoLoad(){
+  try {
+    const [ins, pubs] = await Promise.all([j('api/v1/integrations/inflow/insights?limit=10'),
+                                           j('api/v1/content/publications?limit=10')]);
+    $('ecoInsights').innerHTML = (ins.insights||[]).map(x=>`
+      <tr><td>${(x.title||'').slice(0,42)}<div class="mono" style="color:var(--faint)">${x.type} · conf ${x.confidence??'—'}</div></td>
+      <td><span class="tag ${x.severity==='high'||x.severity==='critical'?'danger':x.severity==='medium'?'warn':''}">${x.severity||'—'}</span></td>
+      <td class="mono">${x.loop_id?x.loop_id.slice(0,14):'—'} ${x.enabled?'<span class="tag ok">已启用</span>':'<span class="tag">草稿</span>'}</td>
+      <td>${x.enabled?'—':`<button class="btn primary sm" onclick="ecoEnable('${x.id}')">启用 Loop</button>`}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="color:var(--faint)">暂无洞察（点「立即同步」）</td></tr>';
+    $('ecoPubs').innerHTML = (pubs.publications||[]).map(p=>`
+      <tr><td>${(p.title||p.item_id).slice(0,38)}<div class="mono" style="color:var(--faint)">${p.item_id}</div></td>
+      <td class="mono" style="color:var(--faint)">${(p.published_at||'').slice(0,16)}</td>
+      <td class="mono" style="color:var(--faint)">→${(p.verify_before||'').slice(0,10)}</td>
+      <td>${p.status==='verified'?`<span class="tag ${p.verdict==='effective'?'ok':''}">${p.verdict||'—'}</span>`:'<span class="tag warn">验证中</span>'}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="color:var(--faint)">暂无发布记录（等 MFlow 回流）</td></tr>';
+  } catch(e) {}
+}
+async function ecoInflowSync(){
+  toast('同步 inFlow 洞察中…');
+  const r = await (await fetch('api/v1/integrations/inflow/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+  toast(r.ok ? `拉取 ${r.fetched} 条，新建 ${r.created} 个 Loop 草稿` : ('失败：'+(r.error||'')));
+  ecoLoad();
+}
+async function ecoEnable(id){
+  const r = await (await fetch(`api/v1/integrations/inflow/insights/${id}/enable`, {method:'POST'})).json();
+  toast(r.ok ? `已启用 Loop：${r.name}` : '启用失败'); ecoLoad(); load(true);
+}
+async function ecoVerify(){
+  const r = await (await fetch('api/v1/content/verify', {method:'POST'})).json();
+  toast(`检查完成：验证 ${r.verified} 条`); ecoLoad();
+}
 let evoData = null;
 async function evoLoad(refresh){
   if (refresh) toast('自检中…');
@@ -558,20 +610,24 @@ async function evoPropose(){
   const r = await (await fetch('api/v1/evolve/propose', {method:'POST'})).json();
   toast(r.ok ? `生成 ${r.count} 条提案` : ('失败：'+(r.error||'')));
   evoLoad();
+ecoLoad();
 }
 async function evoApply(id){
   const r = await (await fetch(`api/v1/evolve/proposals/${id}/apply`, {method:'POST'})).json();
   toast(r.ok ? (r.kind==='config' ? `已应用 ${r.key}=${r.new_value}（可回滚 ${r.old_value}）` : '已登记为待办') : ('失败：'+(r.error||'')));
   evoLoad();
+ecoLoad();
 }
 async function evoRollback(id){
   const r = await (await fetch(`api/v1/evolve/proposals/${id}/rollback`, {method:'POST'})).json();
   toast(r.ok ? `已回滚 → ${r.rollback.key}=${r.rollback.restored}` : ('回滚失败：'+(r.error||'')));
   evoLoad();
+ecoLoad();
 }
 async function evoReject(id){
   await fetch(`api/v1/evolve/proposals/${id}/reject`, {method:'POST'});
   toast('已驳回'); evoLoad();
+ecoLoad();
 }
 async function sgDraft(){
   const prompt = $('sgPrompt').value.trim();
@@ -731,6 +787,7 @@ sgList();
 prModel();
 applyLang();
 evoLoad();
+ecoLoad();
 </script>
 </body>
 </html>

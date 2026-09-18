@@ -920,6 +920,73 @@ def create_app(data_dir: str | None = None) -> Any:
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
 
+    # ---- 生态互联（inFlow 洞察 / MFlow 发布回流）----
+
+    @app.post(f"{prefix}/api/v1/integrations/inflow/sync")
+    async def inflow_sync(request: Request) -> JSONResponse:
+        """拉取 inFlow 新洞察 → 生成 Loop 草稿（+ 回执 ack）。"""
+        from userloop.integrations import inflow
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        return JSONResponse(await inflow.sync(store, ctx, limit=int(body.get("limit") or 20)))
+
+    @app.get(f"{prefix}/api/v1/integrations/inflow/insights")
+    async def inflow_insights(limit: int = 30) -> JSONResponse:
+        rows = await store.list_external_insights(limit=max(1, min(limit, 100)))
+        out = []
+        for r in rows:
+            item = dict(r)
+            item["payload"] = pj(item.get("payload"), {})
+            out.append(item)
+        return JSONResponse({"count": len(out), "insights": out})
+
+    @app.post(f"{prefix}/api/v1/integrations/inflow/insights/{{insight_id}}/enable")
+    async def inflow_enable(insight_id: str) -> JSONResponse:
+        """启用该洞察生成的 Loop 草稿。"""
+        rows = await store.list_external_insights(limit=200)
+        row = next((r for r in rows if r["id"] == insight_id), None)
+        if not row or not row.get("loop_id"):
+            raise HTTPException(status_code=404, detail="洞察或对应 Loop 不存在")
+        templates = await store.get_templates(enabled_only=False)
+        tpl = next((t for t in templates if t["id"] == row["loop_id"]), None)
+        if not tpl:
+            raise HTTPException(status_code=404, detail="Loop 模板不存在")
+        await store.put_template({**tpl, "enabled": True})
+        await store.put_external_insight({**row, "payload": pj(row.get("payload"), {}),
+                                          "external_id": row["external_id"], "enabled": True})
+        return JSONResponse({"ok": True, "loop_id": tpl["id"], "name": tpl["name"]})
+
+    @app.post(f"{prefix}/api/v1/hub/mflow/publish")
+    async def mflow_publish(request: Request) -> JSONResponse:
+        """MFlow 发布回调：登记内容 + 开启验证窗口（可用 api_token 保护）。"""
+        from userloop.integrations import mflow_publish
+
+        try:
+            payload = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
+        if isinstance(payload, list):
+            out = [await mflow_publish.record_publish(store, p) for p in payload]
+            return JSONResponse({"count": len(out), "results": out})
+        return JSONResponse(await mflow_publish.record_publish(store, payload))
+
+    @app.get(f"{prefix}/api/v1/content/publications")
+    async def content_publications(status: str | None = None, limit: int = 30) -> JSONResponse:
+        rows = await store.list_publications(status=status, limit=max(1, min(limit, 100)))
+        for r in rows:
+            r["evidence"] = pj(r.get("evidence"), {})
+        return JSONResponse({"count": len(rows), "publications": rows})
+
+    @app.post(f"{prefix}/api/v1/content/verify")
+    async def content_verify() -> JSONResponse:
+        from userloop.integrations import mflow_publish
+
+        rows = await mflow_publish.verify_due_publications(store)
+        return JSONResponse({"verified": len(rows), "results": rows})
+
     # ---- 自进化（遥测/诊断/提案/Lessons）----
 
     @app.get(f"{prefix}/api/v1/evolve/status")

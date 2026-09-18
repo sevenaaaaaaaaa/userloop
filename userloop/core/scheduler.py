@@ -229,6 +229,14 @@ async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
                 out[tid] = {k: await mdl.train(st, tcfg["data_dir"], k) for k in ("churn", "propensity")}
             elif job == "report":
                 out[tid] = await weekly_report(st, tctx)
+            elif job == "inflow":
+                from userloop.integrations import inflow
+
+                out[tid] = await inflow.sync(st, tctx)
+            elif job == "content_verify":
+                from userloop.integrations import mflow_publish
+
+                out[tid] = {"verified": len(await mflow_publish.verify_due_publications(st))}
             elif job == "evolve_daily":
                 from userloop.evolve import engine as evo
 
@@ -274,6 +282,11 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
 
     sched.add_job(run_all_tenants, CronTrigger(day_of_week="mon", hour=1, minute=0, timezone="UTC"),
                   args=[ctx, "report"], id="weekly_report", max_instances=1, coalesce=True)
+    # 生态互联：inFlow 洞察每 30 分钟同步；内容验证窗口每 6 小时检查
+    sched.add_job(run_all_tenants, "interval", minutes=30, args=[ctx, "inflow"], id="inflow_sync",
+                  max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, "interval", hours=6, args=[ctx, "content_verify"],
+                  id="content_verify", max_instances=1, coalesce=True)
     # 自进化：每日遥测+诊断；每周一 02:00 生成改进提案
     sched.add_job(run_all_tenants, CronTrigger(hour=2, minute=0, timezone="UTC"),
                   args=[ctx, "evolve_daily"], id="evolve_daily", max_instances=1, coalesce=True)

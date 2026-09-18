@@ -149,6 +149,37 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS external_insights (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    type TEXT, severity TEXT, confidence REAL,
+    title TEXT, summary TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    loop_id TEXT,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'actioned',
+    created_at TEXT NOT NULL,
+    UNIQUE(source, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS content_publications (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'mflow',
+    item_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    published_at TEXT NOT NULL,
+    verify_before TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'verifying',
+    verdict TEXT,
+    evidence TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pub_status ON content_publications(status, verify_before);
+
 CREATE TABLE IF NOT EXISTS evolution_proposals (
     id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
@@ -716,6 +747,87 @@ class Store:
         cur = await self.db.execute(
             "SELECT COUNT(*) c FROM actions a JOIN loops l ON a.loop_id=l.id "
             "WHERE l.user_id=? AND a.executed_at>=? AND a.type NOT IN ('noop')", (user_id, since))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    # ---- 外部洞察镜像（inFlow 等）----
+
+    async def put_external_insight(self, ins: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO external_insights (id, source, external_id, type, severity, confidence, title, "
+            "summary, payload, loop_id, enabled, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(source, external_id) DO UPDATE SET loop_id=excluded.loop_id, "
+            "enabled=excluded.enabled, status=excluded.status",
+            (ins["id"], ins["source"], ins["external_id"], ins.get("type"), ins.get("severity"),
+             ins.get("confidence"), ins.get("title"), ins.get("summary"),
+             j(ins.get("payload") or {}), ins.get("loop_id"), 1 if ins.get("enabled") else 0,
+             ins.get("status", "actioned"), iso_now()),
+        )
+
+    async def get_external_insight(self, source: str, external_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT * FROM external_insights WHERE source=? AND external_id=?", (source, external_id))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_external_insights(self, limit: int = 30) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT * FROM external_insights ORDER BY created_at DESC LIMIT ?", (limit,))
+        return [dict(r) for r in await cur.fetchall()]
+
+    # ---- 内容发布与验证（MFlow 回流）----
+
+    async def record_publication(self, pub: dict) -> dict:
+        assert self.db
+        existing = await self.get_publication(pub["source"], pub["item_id"])
+        if existing:
+            await self.db.execute(
+                "UPDATE content_publications SET url=?, title=?, status='verifying', updated_at=? "
+                "WHERE id=?", (pub.get("url", ""), pub.get("title", ""), iso_now(), existing["id"]))
+            return {**existing, "url": pub.get("url"), "title": pub.get("title")}
+        await self.db.execute(
+            "INSERT INTO content_publications (id, source, item_id, title, url, published_at, "
+            "verify_before, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,'verifying',?,?)",
+            (pub["id"], pub["source"], pub["item_id"], pub.get("title", ""), pub.get("url", ""),
+             pub["published_at"], pub["verify_before"], iso_now(), iso_now()),
+        )
+        return await self.get_publication(pub["source"], pub["item_id"])  # type: ignore[return-value]
+
+    async def get_publication(self, source: str, item_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT * FROM content_publications WHERE source=? AND item_id=?", (source, item_id))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_publications(self, status: str | None = None, limit: int = 30) -> list[dict]:
+        assert self.db
+        if status:
+            cur = await self.db.execute(
+                "SELECT * FROM content_publications WHERE status=? ORDER BY created_at DESC LIMIT ?",
+                (status, limit))
+        else:
+            cur = await self.db.execute(
+                "SELECT * FROM content_publications ORDER BY created_at DESC LIMIT ?", (limit,))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def update_publication(self, pub_id: str, **fields: Any) -> None:
+        assert self.db
+        fields.setdefault("updated_at", iso_now())
+        cols = ", ".join(f"{k}=?" for k in fields)
+        await self.db.execute(f"UPDATE content_publications SET {cols} WHERE id=?",
+                              (*fields.values(), pub_id))
+
+    async def count_events_matching(self, prop_key: str, prop_value: str, since: str,
+                                    before: str) -> int:
+        """窗口内匹配某个 prop 的事件数（内容归因用）。"""
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c FROM events WHERE created_at>=? AND created_at<? AND props LIKE ?",
+            (since, before, f'%"{prop_key}"%{prop_value}%'))
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
