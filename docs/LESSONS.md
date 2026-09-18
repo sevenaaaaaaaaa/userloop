@@ -129,6 +129,18 @@
   - 原因：events 在事件后端（MySQL），`store.db` 是 SQLite 兜底表
   - 处理：核对一律走 `store.events.*` / `store.list_events()`；这条教训已在 Team 内重复出现两次（内容归因、回传核对）
 
+- **桥接插件用 `X-UserLoop-Bridge` 鉴权，不是 `Authorization: Bearer`**
+  - 现象：`openflow.automation` 动作返回 400（`openflow.automation: {"ok": false, "status_code": 400}`），而直连 curl 相同路由 200
+  - 原因：适配器发 `Authorization: Bearer`，而桥接的 `$guard()` 只认 `X-UserLoop-Bridge` → 鉴权失败
+  - 处理：桥接相关调用统一带 `X-UserLoop-Bridge`（Bearer 仅作兼容）；失败时回传响应体内的 message（否则只看到 400 无原因）
+  - 教训：**跨系统鉴权头必须与对方 plugin 的 guard 实现对齐**，并且适配器必须回传对方错误信息
+
+- **核对数据时再一次查错库（第 3 次）**
+  - 现象：验证"OpenFlow 是否收到事件"时直接查 `openflow.db`（SQLite）→ 0 条，差点误判
+  - 原因：OpenFlow 的 events 已迁到 MySQL（其 EventStore 双驱动），SQLite 只是兜底
+  - 正确做法：**用对方的"功能证据"而非自己猜存储** —— 本次用桥接日志 `triggers:["automation","canvas"]` 证明链路生效
+  - 已第三次踩到同类坑 → 建议：把"验证要查后端而非兜底库"写进团队代码规范
+
 - **配方动作必须在白名单内**
   - 现象：inFlow 配方里的 `notify_team` 被 Copilot 校验丢弃成 `ai.compose`
   - 处理：统一用白名单内的 `feishu`（团队通知）/`touch.*`/`mflow.*`/`openflow.*`

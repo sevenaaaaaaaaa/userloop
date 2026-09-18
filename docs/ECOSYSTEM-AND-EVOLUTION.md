@@ -48,8 +48,9 @@
 
 | 缺口 | 价值 | 依赖 |
 |---|---|---|
-| **UserLoop → OpenFlow 画布**：Loop 作为 OpenFlow 自动化节点 | 双引擎互调 | OpenFlow 连接器（已支持，配 base_url 即可） |
+| **UserLoop ↔ OpenFlow 画布（已打通 ✅）** | **UserLoop → OpenFlow**：`openflow.automation` 动作 → 桥接插件 `/api/plugin/userloop-bridge/automation` → `flow_handle()`（系统唯一入口：CDP + 自动化 + 画布）。**OpenFlow → UserLoop**：`POST /api/v1/loops/trigger`（按 template_id / event / stage 启动 Loop，仍走冷却与频控护栏） | ✅ 双向实测：桥接日志 `automation userloop_journey -> {"triggers":["automation","canvas"]}`；外部触发 `churn_risk_rescue` → `created: [{loop_id…}]` |
 | **跨系统统一身份（余下）** | 全域归因 | ✅ WebsFlow visitor 已打通；余 OpenFlow `member_id` / MFlow 选题回传 |
+| **对话式触达（已交付框架 ✅）** | 用户消息 → AI 回复 → 原渠道回出（渠道无关，含多轮记忆/身份绑定/降级） | ✅ 实测：真实 DeepSeek 回复（主动追问澄清）；对话入库（inbound 1 / replies 1）。**接入微信/WhatsApp 只需把它们收到的消息 POST 到 `/api/v1/hub/message`**（渠道凭据到位即可） |
 
 ## 二、UserLoop 在产品矩阵中的角色与护城河
 
