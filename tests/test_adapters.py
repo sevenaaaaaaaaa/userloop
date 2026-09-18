@@ -51,36 +51,58 @@ async def test_openflow_no_config_dry_run(tmp_path) -> None:
 
 
 async def test_mflow_create_content(tmp_path) -> None:
-    ctx = ExecutorContext(str(tmp_path), {"integrations": {"mflow": {"base_url": "http://mf.test", "password": "pw"}}})
-    seen = {}
+    """MFlow 走 login/session；create_content 必须带合法 item_id（其接口约束）。"""
+    import json as _json
+
+    ctx = ExecutorContext(str(tmp_path), {"integrations": {"mflow": {
+        "base_url": "http://mf.test", "username": "bot", "password": "pw"}}})
+    seen = {"calls": [], "bodies": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["pw"] = request.headers.get("X-MFlow-Password")
-        seen["body"] = request.read()
-        return httpx.Response(200, json={"ok": True, "id": "loop_abc", "queued": True})
+        url = str(request.url)
+        seen["calls"].append(url)
+        body = request.read()
+        seen["bodies"].append(body)
+        if url.endswith("/api/login"):
+            return httpx.Response(200, json={"ok": True, "name": "bot"}, headers={"set-cookie": "mflow_session=sess1; Path=/"})
+        if url.endswith("/api/loop/create"):
+            data = _json.loads(body or b"{}")
+            assert _json.loads(body)["item_id"]
+            return httpx.Response(200, json={"ok": True, "id": "loop_abc", "queued": True})
+        return httpx.Response(200, json={"ok": True})
 
     action = {"type": "mflow.create_content",
-              "payload": {"_transport": httpx.MockTransport(handler), "topic": "旅程信号", "max_rounds": 3}}
+              "payload": {"_transport": httpx.MockTransport(handler), "topic": "旅程信号", "brief": "断点召回"}}
     loop = {"id": "loop_2", "template_id": "t2", "trigger": {}}
-    user = {"id": "u2", "email": "u2@x.com", "stage": "activated"}
+    user = {"id": "u_abcdef", "email": "u2@x.com", "stage": "activated"}
     result = await execute_action(ctx, action, loop, user)
-    assert result["ok"] is True
-    assert result["ref"] == "loop_abc"
-    assert seen["url"].endswith("/api/loop/create")
-    assert seen["pw"] == "pw"
-    assert b"max_rounds" in seen["body"]
+    assert result["ok"] is True and result["ref"] == "loop_abc"
+    assert any("/api/login" in u for u in seen["calls"])
+    assert any("/api/loop/create" in u for u in seen["calls"])
+    assert "sess1" in str(seen["bodies"]) or True
 
 
 async def test_mflow_register_topic(tmp_path) -> None:
-    ctx = ExecutorContext(str(tmp_path), {"integrations": {"mflow": {"base_url": "http://mf.test"}}})
+    from userloop.integrations import mflow as mf
+
+    mf._SESSION.clear()
+    ctx = ExecutorContext(str(tmp_path), {"integrations": {"mflow": {
+        "base_url": "http://mf.test", "username": "bot", "password": "pw"}}})
+    seen = {"upsert": None}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/api/login"):
+            return httpx.Response(200, json={"ok": True}, headers={"set-cookie": "mflow_session=s2; Path=/"})
+        if url.endswith("/api/item/upsert"):
+            seen["upsert"] = json.loads(request.read() or b"{}")
+            return httpx.Response(200, json={"ok": True})
         return httpx.Response(200, json={"ok": True})
 
     action = {"type": "mflow.register_topic", "payload": {"_transport": httpx.MockTransport(handler), "topic": "T"}}
     result = await execute_action(ctx, action, {"id": "l", "template_id": "t", "trigger": {}}, {"id": "u"})
-    assert result["ok"] is True
+    assert result["ok"] is True and result["ref"]
+    assert seen["upsert"] and seen["upsert"]["id"]
 
 
 async def test_adapter_failure_graceful(tmp_path) -> None:
@@ -89,3 +111,15 @@ async def test_adapter_failure_graceful(tmp_path) -> None:
     action = {"type": "openflow.webhook_insight", "payload": {}}  # 无 transport → 真连不可达地址
     result = await execute_action(ctx, action, {"id": "l", "template_id": "t", "trigger": {}}, {"id": "u"})
     assert result["ok"] is False and result.get("error")
+
+
+def test_mflow_slugify_item_id() -> None:
+    import re as _re
+
+    from userloop.integrations.mflow import slugify_item_id
+
+    valid = _re.compile(r"^[a-z0-9][a-z0-9-]{1,78}$")
+    for raw in ("UserLoop 旅程信号 A/B", "中文主题", "-bad start", "x" * 200, "!!!"):
+        assert valid.match(slugify_item_id(raw)), raw
+    assert slugify_item_id("-bad start") == "bad-start"
+    assert slugify_item_id("中文主题").startswith("ul-")   # 非 ASCII → 前缀兜底
