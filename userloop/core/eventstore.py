@@ -79,6 +79,7 @@ class EventStore(Protocol):
     async def count_by_event_since(self, event: str, since: str) -> int: ...
     async def reassign_user(self, old_user_id: str, new_user_id: str) -> int: ...
     async def delete_user(self, user_id: str) -> int: ...
+    async def count_matching_prop(self, key: str, value: str, since: str, before: str) -> int: ...
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict: ...
     async def total(self) -> int: ...
     async def close(self) -> None: ...
@@ -157,6 +158,14 @@ class SqliteEventStore:
         """DSAR 删除：清除该用户全部事件。"""
         cur = await self.db.execute("DELETE FROM events WHERE user_id=?", (user_id,))
         return cur.rowcount or 0
+
+    async def count_matching_prop(self, key: str, value: str, since: str, before: str) -> int:
+        """窗口内 props 命中 key=value 的事件数（内容归因等）。"""
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c FROM events WHERE created_at>=? AND created_at<? AND props LIKE ?",
+            (since, before, f'%"{key}"%{value}%'))
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"
@@ -265,6 +274,12 @@ class MySqlEventStore:
 
     async def delete_user(self, user_id: str) -> int:
         return await self._exec("DELETE FROM events WHERE user_id=%s", (user_id,))
+
+    async def count_matching_prop(self, key: str, value: str, since: str, before: str) -> int:
+        rows = await self._rows(
+            "SELECT COUNT(*) c FROM events WHERE created_at>=%s AND created_at<%s AND props LIKE %s",
+            (since, before, f'%"{key}"%{value}%'))
+        return int(rows[0]["c"]) if rows else 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"

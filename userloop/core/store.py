@@ -823,13 +823,8 @@ class Store:
 
     async def count_events_matching(self, prop_key: str, prop_value: str, since: str,
                                     before: str) -> int:
-        """窗口内匹配某个 prop 的事件数（内容归因用）。"""
-        assert self.db
-        cur = await self.db.execute(
-            "SELECT COUNT(*) c FROM events WHERE created_at>=? AND created_at<? AND props LIKE ?",
-            (since, before, f'%"{prop_key}"%{prop_value}%'))
-        row = await cur.fetchone()
-        return int(row["c"]) if row else 0
+        """窗口内匹配某个 prop 的事件数（内容归因用；走事件存储后端，不查 SQLite 兜底表）。"""
+        return await self.events.count_matching_prop(prop_key, prop_value, since, before)
 
     # ---- 自进化（提案 / Lessons）----
 
