@@ -995,6 +995,28 @@ def create_app(data_dir: str | None = None) -> Any:
         p = await nlseg.preview(store, seg)
         return JSONResponse({**p, "sample": p["sample"][: max(1, min(limit, 500))]})
 
+    @app.get(f"{prefix}/api/v1/segments/{{seg_id}}/export.csv")
+    async def segments_export(seg_id: str) -> Any:
+        import csv
+        import io
+
+        from fastapi.responses import Response
+
+        from userloop.segments import nl as nlseg
+
+        seg = await store.get_segment(seg_id)
+        if not seg:
+            raise HTTPException(status_code=404, detail="segment not found")
+        p = await nlseg.preview(store, seg)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["user_id", "distinct_id", "email", "stage", "churn", "ltv"])
+        for row in p["sample"]:
+            w.writerow([row["user_id"], row["distinct_id"], row.get("email") or "",
+                        row.get("stage") or "", row.get("churn"), row.get("ltv")])
+        return Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="{seg_id}.csv"'})
+
     # ---- 预测层 API ----
 
     @app.get(f"{prefix}/api/v1/predictions")
@@ -1003,6 +1025,36 @@ def create_app(data_dir: str | None = None) -> Any:
 
         rows = await predict.top(store, sort, limit=max(1, min(limit, 100)))
         return JSONResponse({"sort": sort, "count": len(rows), "items": rows})
+
+    @app.get(f"{prefix}/api/v1/predictions/model")
+    async def predictions_model() -> JSONResponse:
+        from userloop.predict import model as mdl
+
+        out = {}
+        for kind in ("churn", "propensity"):
+            m = mdl.load(cfg["data_dir"], kind)
+            out[kind] = None if not m else {
+                "version": m.get("version"), "metrics": m.get("metrics"),
+                "trained_at": m.get("trained_at"), "features": m.get("features"),
+                "weights": {f: round(w, 3) for f, w in zip(m.get("features") or [], m.get("w") or [])},
+            }
+        return JSONResponse({"models": out})
+
+    @app.post(f"{prefix}/api/v1/predictions/train")
+    async def predictions_train(request: Request) -> JSONResponse:
+        from userloop.predict import model as mdl
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        kinds = body.get("kinds") or ["churn", "propensity"]
+        out = {}
+        for kind in kinds:
+            out[kind] = await mdl.train(store, cfg["data_dir"], kind,
+                                        reference_days=int(body.get("reference_days") or 14),
+                                        horizon_days=int(body.get("horizon_days") or 14))
+        return JSONResponse({"ok": True, "results": out})
 
     @app.get(f"{prefix}/api/v1/predictions/{{user_id}}")
     async def prediction_detail(user_id: str) -> JSONResponse:
@@ -1014,7 +1066,8 @@ def create_app(data_dir: str | None = None) -> Any:
             user = await store.find_user(user_id)
             if not user:
                 raise HTTPException(status_code=404, detail="user not found")
-        row = await store.get_user_score(user["id"]) or await predict.compute(store, user)
+        row = (await store.get_user_score(user["id"])
+               or await predict.compute(store, user, data_dir=cfg["data_dir"]))
         return JSONResponse({"user_id": user["id"], "distinct_id": user["distinct_id"],
                              "stage": user.get("stage"), **row})
 
@@ -1026,7 +1079,8 @@ def create_app(data_dir: str | None = None) -> Any:
             body = await request.json()
         except Exception:
             body = {}
-        n = await predict.run_batch(store, limit=int(body.get("limit") or 50))
+        n = await predict.run_batch(store, limit=int(body.get("limit") or 50),
+                                    data_dir=cfg["data_dir"])
         return JSONResponse({"ok": True, "computed": n})
 
     # ---- 运维 API ----

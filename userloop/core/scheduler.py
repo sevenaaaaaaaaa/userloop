@@ -147,7 +147,19 @@ async def recompute_predictions(store: Store, ctx: ExecutorContext) -> int:
 
     pc = ctx.config.get("predict") or {}
     tz = int(((ctx.config.get("touch") or {}).get("frequency") or {}).get("tz_offset_hours", 8))
-    return await predict.run_batch(store, limit=int(pc.get("batch_size") or 50), tz_offset=tz)
+    return await predict.run_batch(store, limit=int(pc.get("batch_size") or 50), tz_offset=tz,
+                                   data_dir=ctx.config.get("data_dir"))
+
+
+async def train_predict_models(store: Store, ctx: ExecutorContext) -> dict:
+    """每日训练预测模型（样本不足自动跳过，退回规则版）。"""
+    ctx.store = store
+    from userloop.predict import model as mdl
+
+    out = {}
+    for kind in ("churn", "propensity"):
+        out[kind] = await mdl.train(store, ctx.config.get("data_dir") or "data", kind)
+    return out
 
 
 async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:
@@ -192,6 +204,8 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
                   max_instances=1, coalesce=True)
     sched.add_job(recompute_predictions, "interval", minutes=60, args=[store, ctx],
                   id="predictions", max_instances=1, coalesce=True)
+    sched.add_job(train_predict_models, "interval", hours=24, args=[store, ctx],
+                  id="train_models", max_instances=1, coalesce=True)
     # 每周一 09:00（CST = UTC 01:00）生成运营周报
     from apscheduler.triggers.cron import CronTrigger
 
