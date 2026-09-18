@@ -558,6 +558,8 @@ function render(r){
       <td class="wrap" style="color:var(--muted);max-width:360px"><div class="clamp3" title="${esc(x.reasoning||'')}">${x.reasoning||''}</div></td>
       <td class="mono">${(x.confidence||0).toFixed(2)}</td><td>${ops}</td></tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
+  // 首屏渲染完成（页面有了高度）后再注册分区懒加载
+  setupLazy();
 }
 
 async function asLoad(){
@@ -848,24 +850,29 @@ document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.addEventListen
 syncNav();
 load();
 schedule();
-// 分区懒加载：首屏只拉总览，其余面板滚动进入视口时再拉（减少首屏并发请求）
+// 分区懒加载：首屏只拉总览；等首屏渲染出高度后再注册观察器（否则页面过短会全部触发）
+let lazyInit = false;
 const lazyDone = {};
-function lazyLoad(secId, fn, key){
-  const sec = document.getElementById(secId);
-  if (!sec) { fn(); return; }
-  const k = key || secId;
-  const run = () => { if (lazyDone[k]) return; lazyDone[k] = 1; Promise.resolve(fn()).catch(()=>{}); };
-  const io = new IntersectionObserver((es) => {
-    if (es.some(e => e.isIntersecting)) { io.disconnect(); run(); }
-  }, { rootMargin: '300px' });
-  io.observe(sec);
+function setupLazy(){
+  if (lazyInit) return; lazyInit = true;
+  const lazyLoad = (secId, fn) => {
+    const sec = document.getElementById(secId);
+    if (!sec) { Promise.resolve(fn()).catch(()=>{}); return; }
+    const run = () => { if (lazyDone[secId]) return; lazyDone[secId] = 1; Promise.resolve(fn()).catch(()=>{}); };
+    const io = new IntersectionObserver((es) => {
+      if (es.some(e => e.isIntersecting)) { io.disconnect(); run(); }
+    }, { rootMargin: '240px' });
+    io.observe(sec);
+  };
+  lazyLoad('sec-report', rpLoad);
+  lazyLoad('sec-segments', sgList);
+  lazyLoad('sec-predict', prModel);
+  lazyLoad('sec-evolve', evoLoad);
+  lazyLoad('sec-eco', ecoLoad);
+  lazyLoad('sec-assets', asLoad);
 }
-lazyLoad('sec-report', rpLoad);
-lazyLoad('sec-segments', sgList);
-lazyLoad('sec-predict', prModel);
-lazyLoad('sec-evolve', evoLoad);
-lazyLoad('sec-eco', ecoLoad);
-lazyLoad('sec-assets', asLoad);
+// 兜底：总览异常时也保证面板可加载
+setTimeout(setupLazy, 3500);
 applyLang();
 </script>
 </body>
