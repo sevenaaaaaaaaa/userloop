@@ -129,6 +129,16 @@ async def prune_data(store: Store, retention_days: int = 180, min_interval_hours
     return result
 
 
+async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:
+    """每周运营周报：生成 + 落盘（配置了 send 则推送）。"""
+    from userloop.ai import reporter
+
+    rep = await reporter.build(store, ctx)
+    path = await reporter.save(store, ctx, rep)
+    sent = await reporter.send(ctx, rep) if (ctx.config.get("report") or {}).get("send") else {}
+    return {"name": rep["name"], "path": path, "degraded": rep["degraded"], "sent": sent}
+
+
 async def run_ai_brain(store: Store, ctx: ExecutorContext) -> list[dict]:
     """AI 大脑批次任务（频次受限：默认每 30 分钟一批，每批成本有界）。"""
     from userloop.ai import brain as brain_mod
@@ -157,4 +167,9 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
                   max_instances=1, coalesce=True)
     sched.add_job(run_ai_brain, "interval", minutes=30, args=[store, ctx], id="ai_brain",
                   max_instances=1, coalesce=True)
+    # 每周一 09:00（CST = UTC 01:00）生成运营周报
+    from apscheduler.triggers.cron import CronTrigger
+
+    sched.add_job(weekly_report, CronTrigger(day_of_week="mon", hour=1, minute=0, timezone="UTC"),
+                  args=[store, ctx], id="weekly_report", max_instances=1, coalesce=True)
     return sched
