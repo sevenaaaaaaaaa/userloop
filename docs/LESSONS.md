@@ -113,6 +113,22 @@
   - 处理：改为 `count_matching_any`（`props LIKE a OR props LIKE b`，按事件去重）
   - 验证：`test_attribution_counts_each_event_once`
 
+- **入站端点必须在免登录白名单内（否则被自家门禁先拦）**
+  - 现象：MFlow 发布适配器调用 `/hub/mflow/publish` 返回 403/401，日志看不到进入 handler
+  - 原因：该路径不在 `public_api`，请求先被鉴权中间件拦下，根本没走到 handler 自带的 token 校验
+  - 处理：把"自带 token 校验的入站端点"加入白名单（ingest/track/**hub/publish**）；加测试断言 401→校验通过
+  - 教训：**新增入站端点时，白名单与处理器校验必须一起改**
+
+- **Cloudflare 会拦服务端到服务端的非浏览器 UA**
+  - 现象：MFlow 的 `webhook.py`（`urllib`，默认 UA `Python-urllib/3.6`）经公网域名调用被 CF 403
+  - 处理：同机互调改走**内部源站**（`http://127.0.0.1:8600/userloop/...`），仍是标准 HTTP API，且更快更稳
+  - 原则：**跨系统同机调用优先内网地址**，公网地址留给外部系统
+
+- **验证脚本自身也会踩"查错库"的坑**
+  - 现象：核对回传事件时用 `store.db.execute("SELECT … FROM events")` → 0 条，误判为"没回流"
+  - 原因：events 在事件后端（MySQL），`store.db` 是 SQLite 兜底表
+  - 处理：核对一律走 `store.events.*` / `store.list_events()`；这条教训已在 Team 内重复出现两次（内容归因、回传核对）
+
 - **配方动作必须在白名单内**
   - 现象：inFlow 配方里的 `notify_team` 被 Copilot 校验丢弃成 `ai.compose`
   - 处理：统一用白名单内的 `feishu`（团队通知）/`touch.*`/`mflow.*`/`openflow.*`
