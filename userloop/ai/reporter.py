@@ -133,7 +133,7 @@ async def build(store: Store, ctx: ExecutorContext, days: int | None = None,
 
         res = await chat(ctx, [{"role": "system", "content": SYSTEM},
                                {"role": "user", "content": _stats_brief(stats)}],
-                         transport=transport, max_tokens=900)
+                         transport=transport, max_tokens=900, json_mode=False)
         if res.get("ok"):
             narrative = str(res.get("content") or "").strip()
         else:
