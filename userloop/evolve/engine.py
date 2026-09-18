@@ -338,6 +338,45 @@ async def apply_proposal(store: Store, ctx: ExecutorContext, proposal_id: str) -
             "old_value": old, "new_value": value, "rollback": {"key": key, "value": old}}
 
 
+async def rollback_proposal(store: Store, ctx: ExecutorContext, proposal_id: str) -> dict[str, Any]:
+    """回滚已应用的配置类提案（恢复旧值），并在 Lessons 里留痕。"""
+    rows = await store.list_evolution_proposals(limit=200)
+    prop = next((x for x in rows if x["id"] == proposal_id), None)
+    if not prop:
+        return {"ok": False, "error": "提案不存在"}
+    if prop.get("status") != "applied":
+        return {"ok": False, "error": f"仅可回滚已应用的提案（当前 {prop.get('status')}）"}
+    spec = APPLY_WHITELIST.get(str(prop.get("apply_key") or ""))
+    if not spec or prop.get("old_value") is None:
+        return {"ok": False, "error": "该提案无旧值记录，无法自动回滚"}
+    import os
+
+    cfg_path = os.path.join(ctx.config.get("data_dir") or "data", "config.json")
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            file_cfg = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        file_cfg = {}
+    node: Any = file_cfg
+    for n in spec[:-1]:
+        node = node.setdefault(n, {})
+    node[spec[-1]] = prop["old_value"]
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(file_cfg, f, ensure_ascii=False, indent=2)
+    mem: Any = ctx.config
+    for n in spec[:-1]:
+        mem = mem.setdefault(n, {})
+    mem[spec[-1]] = prop["old_value"]
+    prop["status"] = "rolled_back"
+    await store.put_evolution_proposal(prop, status="rolled_back")
+    await store.add_lesson({"category": "evolution",
+                            "title": f"回滚配置变更：{prop['apply_key']} → {prop['old_value']}",
+                            "detail": f"该变更已被评估为不适用（原值 {prop.get('old_value')}，"
+                                      f"试改值 {prop.get('apply_value')}）",
+                            "fix": "回滚后观察指标恢复情况", "source": "evolution"})
+    return {"ok": True, "rollback": {"key": prop["apply_key"], "restored": prop["old_value"]}}
+
+
 # ── Lessons 渲染 ──
 
 def render_lessons_md(lessons: list[dict]) -> str:

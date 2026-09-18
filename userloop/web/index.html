@@ -544,6 +544,11 @@ async function evoLoad(refresh){
     <td><span class="tag ${p.risk==='low'?'ok':p.risk==='high'?'danger':'warn'}">${p.risk}</span></td>
     <td><button class="btn primary sm" onclick="evoApply('${p.id}')">应用</button>
         <button class="btn ghost sm" onclick="evoReject('${p.id}')">驳回</button></td></tr>`).join('')
+    + (r.proposals||[]).filter(p=>p.status==='applied').map(p=>`
+    <tr><td>${p.title}<div class="mono" style="color:var(--ok)">已应用 ${p.apply_key}=${p.apply_value}（旧值 ${p.old_value}）</div></td>
+    <td><span class="tag ok">applied</span></td><td style="color:var(--muted)">${(p.impact||'').slice(0,60)}</td>
+    <td><span class="tag">${p.risk}</span></td>
+    <td><button class="btn ghost sm" onclick="evoRollback('${p.id}')">回滚</button></td></tr>`).join('')
     || '<tr><td colspan="5" style="color:var(--faint)">暂无待批提案（点「生成提案」）</td></tr>';
   $('evoLessons').innerHTML = (r.lessons||[]).slice(0,8).map(l=>`<div style="margin:4px 0">• <b>${l.title}</b> <span class="mono" style="color:var(--faint)">${l.source}</span></div>`).join('')
     || '<div style="color:var(--faint)">暂无 Lessons</div>';
@@ -557,6 +562,11 @@ async function evoPropose(){
 async function evoApply(id){
   const r = await (await fetch(`api/v1/evolve/proposals/${id}/apply`, {method:'POST'})).json();
   toast(r.ok ? (r.kind==='config' ? `已应用 ${r.key}=${r.new_value}（可回滚 ${r.old_value}）` : '已登记为待办') : ('失败：'+(r.error||'')));
+  evoLoad();
+}
+async function evoRollback(id){
+  const r = await (await fetch(`api/v1/evolve/proposals/${id}/rollback`, {method:'POST'})).json();
+  toast(r.ok ? `已回滚 → ${r.rollback.key}=${r.rollback.restored}` : ('回滚失败：'+(r.error||'')));
   evoLoad();
 }
 async function evoReject(id){

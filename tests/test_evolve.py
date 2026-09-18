@@ -133,3 +133,23 @@ def test_evolve_api(tmp_path) -> None:
         assert r["ok"]
         html = client.get("/api/v1/evolve/lessons")
         assert "手动记录一条" in html.text
+
+
+async def test_rollback_restores_old_value_and_logs_lesson(store: Store, tmp_path) -> None:
+    ctx = _ctx(tmp_path, {"touch": {"frequency": {"weekly_cap": 3}}})
+    ctx.store = store
+    prop = {"id": "evo_rb", "title": "放宽周上限", "kind": "config",
+            "apply_key": "frequency.weekly_cap", "apply_value": 8, "risk": "low"}
+    await store.put_evolution_proposal(prop)
+    assert (await evo.apply_proposal(store, ctx, "evo_rb"))["ok"]
+    assert ctx.config["touch"]["frequency"]["weekly_cap"] == 8
+    rb = await evo.rollback_proposal(store, ctx, "evo_rb")
+    assert rb["ok"] and rb["rollback"]["restored"] == 3
+    assert ctx.config["touch"]["frequency"]["weekly_cap"] == 3
+    with open(str(tmp_path / "config.json"), encoding="utf-8") as f:
+        assert json.load(f)["touch"]["frequency"]["weekly_cap"] == 3
+    assert any("回滚配置变更" in l["title"] for l in await store.list_lessons())
+    # 未应用的提案不可回滚
+    await store.put_evolution_proposal({"id": "evo_p2", "title": "x", "kind": "config",
+                                        "apply_key": "frequency.weekly_cap", "apply_value": 9})
+    assert (await evo.rollback_proposal(store, ctx, "evo_p2"))["ok"] is False
