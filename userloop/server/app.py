@@ -37,8 +37,10 @@ def create_app(data_dir: str | None = None) -> Any:
 
     prefix = os.environ.get("USERLOOP_PREFIX", "").rstrip("/")
     # 免登录路径（埋点/接入/登录自身）
+    # 免登录端点（自带 token 校验的入站通道；埋点/接入/登录自身）
     public_api = {"/api/v1/ingest", "/api/v1/ingest/batch", "/api/v1/track",
-                  "/api/v1/hub/ingest", "/api/login", "/api/logout", "/api/auth/me"}
+                  "/api/v1/hub/ingest", "/api/v1/hub/mflow/publish",
+                  "/api/login", "/api/logout", "/api/auth/me"}
 
     cfg = load_config(data_dir)
     tenants = TenantStores(cfg)          # 租户注册表 + Store 缓存

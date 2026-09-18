@@ -203,3 +203,16 @@ def test_mflow_publish_token_protection(tmp_path) -> None:
         assert client.post("/api/v1/hub/mflow/publish", json={"item_id": "x"}).status_code == 401
         r = client.post("/api/v1/hub/mflow/publish?token=tk1", json={"item_id": "x", "title": "T"}).json()
         assert r["ok"]
+
+
+def test_mflow_publish_is_public_path_with_token_guard(tmp_path) -> None:
+    """publish 端点必须在免登录白名单内（否则被门禁拦成 401/403），由自身 token 校验把关。"""
+    (tmp_path / "config.json").write_text(json.dumps({"api_token": "tk2", "storage": {}}), encoding="utf-8")
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        assert client.post("/api/v1/hub/mflow/publish", json={"item_id": "a"}).status_code == 401
+        assert client.post("/api/v1/hub/mflow/publish?token=bad", json={"item_id": "a"}).status_code == 401
+        ok = client.post("/api/v1/hub/mflow/publish?token=tk2", json={"item_id": "a"}).json()
+        assert ok["ok"]
