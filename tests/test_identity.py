@@ -186,3 +186,37 @@ def test_dsar_export_and_erase(tmp_path) -> None:
         assert client.get("/api/v1/compliance/export?distinct_id=ds1").status_code == 404
         events = client.get("/api/v1/events?limit=20").json()["events"]
         assert all(e["distinct_id"] != "ds1" for e in events)
+
+
+# ── 跨系统身份映射：OpenFlow member_id / OpenFlow visitor（本轮新增）──
+
+async def test_openflow_member_id_binds_and_merges(store: Store, tmp_path) -> None:
+    """OpenFlow 事件带 member_id（+email）→ 绑定 openflow_member，实名后自动归并。"""
+    ctx = _ctx(tmp_path)
+    # OpenFlow 匿名访客事件（无 member_id）：建匿名档案
+    r0 = await handle(store, ctx, {"distinct_id": "of_anon", "event": "page_view"})
+    # 同访客注册成为会员：事件同时带 member_id 与 email → 绑定会员标识 + 实名
+    r1 = await handle(store, ctx, {"distinct_id": "of_anon", "event": "signup",
+                                   "email": "of@x.com",
+                                   "props": {"openflow_member_id": "M-1001",
+                                             "openflow_visitor_id": "of_anon"}})
+    assert r1["user_id"] == r0["user_id"]                 # 同 distinct_id → 同档案
+    assert await store.resolve_identity("openflow_member", "M-1001") == r0["user_id"]
+    assert await store.resolve_identity("openflow_visitor", "of_anon") == r0["user_id"]
+    # 该会员从另一个匿名设备进来（不同 distinct_id，但带同一 member_id）→ 归并
+    r2 = await handle(store, ctx, {"distinct_id": "of_other_device", "event": "page_view",
+                                   "props": {"openflow_member_id": "M-1001"}})
+    assert r2["user_id"] == r0["user_id"] and r2.get("merged") is True
+    assert (await store.counts())["users"] == 1
+
+
+async def test_websflow_form_snippet_auto_identifies() -> None:
+    """WebsFlow 页面注入脚本应含表单提交抓取 + 自动实名（识别率关键一环）。"""
+    from userloop.touch.websflow import track_back_snippet
+
+    js = track_back_snippet("https://nownexts.com/userloop")
+    assert "form_submit" in js and "userloop.identify" in js
+    assert "input[type=email]" in js and "type=tel" in js
+    # 不拦截表单：无 preventDefault
+    assert "preventDefault" not in js
+    assert "https://nownexts.com/userloop/track.js" in js

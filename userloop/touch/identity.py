@@ -45,7 +45,9 @@ async def collect_from_event(store: Store, user_id: str, props: dict[str, Any], 
     """从事件属性里自动补全身份（埋点带 email/phone/微信标识时调用）。"""
     mapping = {"email": "email", "phone": "phone", "mobile": "phone",
                "openid": "wechat_openid", "unionid": "wechat_unionid",
-               "wecom_userid": "wecom_userid", "visitor_id": "websflow_visitor"}
+               "wecom_userid": "wecom_userid", "visitor_id": "websflow_visitor",
+               "member_id": "openflow_member", "openflow_member_id": "openflow_member",
+               "openflow_visitor_id": "openflow_visitor"}
     for key, type_ in mapping.items():
         val = props.get(key)
         if val:

@@ -44,26 +44,52 @@ async def login(cfg: dict, transport: Any = None, force: bool = False) -> str | 
     return None
 
 
+_TRACK_BACK = """(function(){
+  function load(){
+    var s=document.createElement('script');s.src='__UL__/track.js';s.defer=true;
+    document.head.appendChild(s);
+    var t=setInterval(function(){if(window.userloop){clearInterval(t);hook();}},300);
+    setTimeout(function(){clearInterval(t);},8000);
+  }
+  function pick(form,sel){try{var e=form.querySelector(sel);return e&&e.value?String(e.value).trim():'';}catch(e){return '';}}
+  function scan(form){
+    var email=pick(form,'input[type=email],input[name*=email i],input[id*=email i]');
+    var phone=pick(form,'input[type=tel],input[name*=phone i],input[name*=mobile i],input[id*=phone i],input[id*=mobile i]');
+    if(!email||!phone){
+      var ins=(form.querySelectorAll?form.querySelectorAll('input'):[]);
+      for(var i=0;i<ins.length;i++){var v=(ins[i].value||'').trim();
+        if(!email&&/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(v))email=v;
+        if(!phone&&/^\\+?\\d[\\d\\s-]{5,}$/.test(v))phone=v;}
+    }
+    return {email:email,phone:phone};
+  }
+  function hook(){
+    try{var v=localStorage.getItem('wf_vid')||'';
+      if(v)window.userloop.track('websflow_link',{visitor_id:v});}catch(e){}
+    // 表单提交：抓取邮箱/手机号自动实名（不拦截提交，失败静默）
+    document.addEventListener('submit',function(ev){
+      var form=ev.target;
+      if(!form||form.tagName!=='FORM')return;
+      var id=scan(form);
+      try{window.userloop.track('form_submit',
+        {page:location.pathname,has_email:!!id.email,has_phone:!!id.phone});}catch(e){}
+      try{if(id.email||id.phone)window.userloop.identify({email:id.email,phone:id.phone});}catch(e){}
+    },true);
+  }
+  if(document.readyState==='complete')load();else window.addEventListener('load',load);
+})();"""
+
+
 def track_back_snippet(ul_base: str) -> str:
     """WebsFlow 页面回传脚本（注入 data.global.tracking.custom）。
 
     - 载入 UserLoop tracker（page_view / element_click 全量回流）
     - 把 WebsFlow 的访客 id（localStorage.wf_vid）作为 visitor_id 上报
       → 事件总线按 websflow_visitor 绑定身份，实现跨系统身份链接
+    - **表单提交自动实名**：抓取表单里的邮箱/手机号 → `form_submit` 事件 + identify
+      （不拦截表单提交，失败静默；这是提升识别率的关键一环）
     """
-    return (
-        "(function(){"
-        "function load(){"
-        "var s=document.createElement('script');s.src='" + ul_base + "/track.js';s.defer=true;"
-        "document.head.appendChild(s);"
-        "var t=setInterval(function(){"
-        "if(window.userloop){clearInterval(t);"
-        "try{var v=localStorage.getItem('wf_vid')||'';"
-        "if(v)window.userloop.track('websflow_link',{visitor_id:v});}catch(e){}}},300);"
-        "setTimeout(function(){clearInterval(t);},8000);}"
-        "if(document.readyState==='complete')load();"
-        "else window.addEventListener('load',load);"
-        "})();")
+    return _TRACK_BACK.replace("__UL__", ul_base.rstrip("/"))
 
 
 def build_page_data(spec_title: str, spec_body: str, cta_text: str, cta_link: str,
