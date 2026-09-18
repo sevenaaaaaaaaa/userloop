@@ -111,6 +111,7 @@ def brain(data_dir: str | None, distinct_id: str | None, limit: int, force: bool
         await store.connect()
         await seed_templates(store, cfg["data_dir"])
         ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
         try:
             if distinct_id:
                 user = await store.find_user(distinct_id)
@@ -238,6 +239,7 @@ def copilot(prompt: str, data_dir: str | None, do_apply: bool, enable: bool) -> 
         store = Store(cfg["db_path"], cfg)
         await store.connect()
         ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
         try:
             res = await cp.draft_loop(ctx, prompt)
             if not res.get("ok"):

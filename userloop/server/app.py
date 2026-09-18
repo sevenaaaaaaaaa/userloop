@@ -42,6 +42,7 @@ def create_app(data_dir: str | None = None) -> Any:
     cfg = load_config(data_dir)
     store = Store(cfg["db_path"], cfg)
     ctx = ExecutorContext(cfg["data_dir"], cfg)
+    ctx.store = store          # 频控台账/回执/硬规则依赖（所有链路统一）
     sessions = Sessions()
     throttle = Throttle()
     authed_mode = auth_enabled(cfg["data_dir"])
