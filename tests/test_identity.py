@@ -141,3 +141,48 @@ def test_h5_page_has_lead_capture_and_identify_endpoint(tmp_path) -> None:
         assert r["ok"] is True
         user = client.get(f"/api/v1/users/{uid}").json()["user"]
         assert user["email"] == "lead@x.com"
+
+
+# ── 合规中心（consent / DSAR）──
+
+def test_consent_gate_and_unsubscribe(tmp_path) -> None:
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        client.post("/api/v1/ingest", json={"distinct_id": "cc1", "email": "cc1@x.com", "event": "signup"})
+        # 未授权（默认 None → 视为未同意）
+        c = client.get("/api/v1/compliance/consent?distinct_id=cc1").json()
+        assert c["consents"] == []
+        # 授予同意
+        r = client.post("/api/v1/compliance/consent", json={"distinct_id": "cc1", "purpose": "marketing",
+                                                            "granted": True, "source": "web_form"}).json()
+        assert r["ok"] and r["granted"] is True
+        # 撤回 → 打上退订标记
+        client.post("/api/v1/compliance/consent", json={"distinct_id": "cc1", "purpose": "marketing",
+                                                        "granted": False})
+        users = client.get("/api/v1/users").json()["users"]
+        u = next(x for x in users if x["distinct_id"] == "cc1")
+        assert (u["props"] or {}).get("marketing_unsubscribed") is True
+
+
+def test_dsar_export_and_erase(tmp_path) -> None:
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        client.post("/api/v1/ingest", json={"distinct_id": "ds1", "email": "ds1@x.com", "event": "signup"})
+        client.post("/api/v1/ingest", json={"distinct_id": "ds1", "event": "page_view"})
+        exp = client.get("/api/v1/compliance/export?distinct_id=ds1").json()["data"]
+        assert exp["user"]["email"] == "ds1@x.com"
+        assert len(exp["events"]) == 2
+        assert any(i["type"] == "email" for i in exp["identities"])
+
+        # 未二次确认 → 拒绝
+        assert client.post("/api/v1/compliance/erase", json={"distinct_id": "ds1"}).status_code == 400
+        out = client.post("/api/v1/compliance/erase", json={"distinct_id": "ds1", "confirm": "ERASE"}).json()
+        assert out["erased"] is True and out["deleted"]["events"] == 2
+        # 删除后：用户与事件都不存在
+        assert client.get("/api/v1/compliance/export?distinct_id=ds1").status_code == 404
+        events = client.get("/api/v1/events?limit=20").json()["events"]
+        assert all(e["distinct_id"] != "ds1" for e in events)

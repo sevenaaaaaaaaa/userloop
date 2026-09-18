@@ -243,6 +243,40 @@ async def execute_action(
                     pass
             return blocked
 
+    # STO（发送时机优化）：非事务类营销触达，若不在用户历史活跃时段则推迟一次
+    sto = (ctx.config.get("touch") or {}).get("sto") or {}
+    if (store is not None and sto.get("enabled") and channel in _freq.MARKETING_CHANNELS
+            and not is_auto and not payload.get("force") and not payload.get("_sto_deferred")
+            and not _freq._is_transactional(loop.get("template_id"), _freq.cfg_of(ctx))):
+        try:
+            from datetime import datetime, timedelta
+
+            import json as _json
+
+            score = await store.get_user_score(user.get("id", ""))
+            bh = (score or {}).get("best_hour")
+            action_id = action.get("id")
+            if bh is not None and action_id:
+                tz = int(((_freq.cfg_of(ctx)).get("tz_offset_hours")) or 8)
+                local_now = datetime.utcnow() + timedelta(hours=tz)
+                window = int(sto.get("window_hours") or 2)
+                in_window = abs(local_now.hour - int(bh)) <= window
+                if not in_window:
+                    target = local_now.replace(minute=0, second=0, microsecond=0)
+                    delta_h = (int(bh) - local_now.hour) % 24 or 24
+                    if delta_h <= int(sto.get("max_delay_hours") or 20):
+                        target = (local_now + timedelta(hours=delta_h)).replace(tzinfo=None) - timedelta(hours=tz)
+                        new_payload = {**payload, "_sto_deferred": True}
+                        await store.reschedule_action(action_id, target.isoformat(timespec="seconds") + "Z", new_payload)
+                        deferred = {"type": atype, "channel": channel, "ok": False, "deferred_by_sto": True,
+                                    "note": f"STO：该用户活跃时段为 {int(bh)}:00（本地），已推迟到 "
+                                            f"{target.strftime('%H:%M')}Z 发送"}
+                        ctx.write_outbox({"kind": atype, "loop_id": loop.get("id"), "user_id": user.get("id"),
+                                          "subject": "", "text": "", **deferred})
+                        return deferred
+        except Exception:  # noqa: BLE001 —— STO 失败不影响正常发送
+            pass
+
     result = await _execute_action(ctx, action, loop, user)
     rec_channel = str(result.get("channel") or channel)     # auto → 用解析后的真实渠道记账
     if (result.get("ok") and not result.get("dry_run") and rec_channel in _freq.MARKETING_CHANNELS

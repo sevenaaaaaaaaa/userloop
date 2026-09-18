@@ -149,12 +149,30 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS segments (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS consents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    granted INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, purpose)
+);
+CREATE INDEX IF NOT EXISTS idx_consents_user ON consents(user_id);
+
 CREATE TABLE IF NOT EXISTS user_scores (
     user_id TEXT PRIMARY KEY,
     churn REAL NOT NULL DEFAULT 0,
     ltv REAL NOT NULL DEFAULT 0,
     propensity REAL NOT NULL DEFAULT 0,
     tier TEXT NOT NULL DEFAULT '',
+    best_hour INTEGER,
     reasons TEXT NOT NULL DEFAULT '{}',
     computed_at TEXT NOT NULL
 );
@@ -270,7 +288,8 @@ class Store:
         await self.db.executescript(SCHEMA)
         await self.db.commit()
         # 存量库幂等补列（CREATE TABLE IF NOT EXISTS 不会新增列）
-        for ddl in ("ALTER TABLE ai_decisions ADD COLUMN error TEXT",):
+        for ddl in ("ALTER TABLE ai_decisions ADD COLUMN error TEXT",
+                    "ALTER TABLE user_scores ADD COLUMN best_hour INTEGER"):
             try:
                 await self.db.execute(ddl)
             except aiosqlite.Error:
@@ -516,6 +535,17 @@ class Store:
         )
         return [dict(r) for r in await cur.fetchall()]
 
+    async def reschedule_action(self, action_id: str, scheduled_at: str, payload: dict | None = None) -> None:
+        """STO：把动作推迟到用户最佳时段（可同时更新 payload 里的标记）。"""
+        assert self.db
+        if payload is None:
+            await self.db.execute("UPDATE actions SET scheduled_at=?, status='pending' WHERE id=?",
+                                  (scheduled_at, action_id))
+        else:
+            await self.db.execute(
+                "UPDATE actions SET scheduled_at=?, status='pending', payload=? WHERE id=?",
+                (scheduled_at, j(payload), action_id))
+
     async def update_action(self, action_id: str, **fields: Any) -> None:
         assert self.db
         cols = ", ".join(f"{k}=?" for k in fields)
@@ -671,16 +701,105 @@ class Store:
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
+    async def put_segment(self, seg: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO segments (id, data, created_at) VALUES (?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+            (seg["id"], j(seg), iso_now()),
+        )
+
+    async def list_segments(self) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute("SELECT data FROM segments ORDER BY created_at DESC")
+        return [pj(r["data"], {}) for r in await cur.fetchall()]
+
+    async def get_segment(self, seg_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT data FROM segments WHERE id=?", (seg_id,))
+        row = await cur.fetchone()
+        return pj(row["data"], {}) if row else None
+
+    async def set_consent(self, user_id: str, purpose: str, granted: bool, source: str = "") -> None:
+        """同意管理（个保法/GDPR）：按用途记录授权状态，可覆盖。"""
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO consents (user_id, purpose, granted, source, created_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(user_id, purpose) DO UPDATE SET granted=excluded.granted, "
+            "source=excluded.source, created_at=excluded.created_at",
+            (user_id, purpose, 1 if granted else 0, source, iso_now()),
+        )
+
+    async def get_consent(self, user_id: str, purpose: str) -> bool | None:
+        """返回 True/False；None 表示未记录（视为未授权，合规从严）。"""
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT granted FROM consents WHERE user_id=? AND purpose=?", (user_id, purpose))
+        row = await cur.fetchone()
+        return bool(row["granted"]) if row else None
+
+    async def list_consents(self, user_id: str) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute("SELECT purpose, granted, source, created_at FROM consents WHERE user_id=?",
+                                    (user_id,))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def export_user_data(self, user_id: str) -> dict:
+        """DSAR 导出：该用户在全系统的数据快照（可交付给用户）。"""
+        assert self.db
+        user = await self.get_user(user_id)
+        if not user:
+            return {}
+        out: dict = {"user": {k: v for k, v in user.items() if k != "props"},
+                     "props": pj(user.get("props"), {}),
+                     "identities": [], "events": [], "transitions": [], "loops": [],
+                     "actions": [], "touch_log": [], "consents": [], "scores": [], "ai_decisions": []}
+        cur = await self.db.execute("SELECT type, value, verified, source, created_at FROM identities WHERE user_id=?", (user_id,))
+        out["identities"] = [dict(r) for r in await cur.fetchall()]
+        out["events"] = await self.recent_events_for_user(user_id, limit=5000)
+        out["transitions"] = await self.list_transitions(user_id=user_id, limit=500)
+        loops = [l for l in await self.list_loops(limit=1000) if l["user_id"] == user_id]
+        out["loops"] = loops
+        for l in loops[:200]:
+            out["actions"].extend(await self.actions_for_loop(l["id"]))
+        out["touch_log"] = await self.recent_touches(user_id, hours=24 * 365 * 5)
+        out["consents"] = await self.list_consents(user_id)
+        sc = await self.get_user_score(user_id)
+        out["scores"] = [sc] if sc else []
+        out["ai_decisions"] = [d for d in await self.list_ai_decisions(limit=1000) if d["user_id"] == user_id]
+        return out
+
+    async def erase_user(self, user_id: str) -> dict:
+        """DSAR 删除：清除该用户在本系统的全部数据（不可逆）。"""
+        assert self.db
+        user = await self.get_user(user_id)
+        if not user:
+            return {"erased": False, "reason": "用户不存在"}
+        deleted = await self.events.delete_user(user_id)
+        counts = {"events": deleted}
+        for table in ("identities", "stage_transitions", "loops", "ai_decisions", "ab_assignments",
+                      "canvas_runs", "canvas_waits", "touch_log", "touch_blocks", "touch_pages",
+                      "user_scores", "consents"):
+            try:
+                cur = await self.db.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+                if cur.rowcount:
+                    counts[table] = cur.rowcount
+            except aiosqlite.Error:
+                pass
+        await self.db.execute("DELETE FROM users WHERE id=?", (user_id,))
+        counts["users"] = 1
+        return {"erased": True, "user_id": user_id, "deleted": counts}
+
     async def upsert_user_score(self, row: dict) -> None:
         """写入预测分数（churn/ltv/propensity + 归因）。"""
         assert self.db
         await self.db.execute(
-            "INSERT INTO user_scores (user_id, churn, ltv, propensity, tier, reasons, computed_at) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET churn=excluded.churn, "
+            "INSERT INTO user_scores (user_id, churn, ltv, propensity, tier, best_hour, reasons, computed_at) "
+            "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET churn=excluded.churn, "
             "ltv=excluded.ltv, propensity=excluded.propensity, tier=excluded.tier, "
-            "reasons=excluded.reasons, computed_at=excluded.computed_at",
+            "best_hour=excluded.best_hour, reasons=excluded.reasons, computed_at=excluded.computed_at",
             (row["user_id"], float(row["churn"]), float(row["ltv"]), float(row["propensity"]),
-             row.get("tier", ""), j(row.get("reasons", {})), row["computed_at"]),
+             row.get("tier", ""), row.get("best_hour"), j(row.get("reasons", {})), row["computed_at"]),
         )
 
     async def get_user_score(self, user_id: str) -> dict | None:

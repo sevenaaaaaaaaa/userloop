@@ -78,6 +78,7 @@ class EventStore(Protocol):
     async def newest_at(self) -> str | None: ...
     async def count_by_event_since(self, event: str, since: str) -> int: ...
     async def reassign_user(self, old_user_id: str, new_user_id: str) -> int: ...
+    async def delete_user(self, user_id: str) -> int: ...
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict: ...
     async def total(self) -> int: ...
     async def close(self) -> None: ...
@@ -150,6 +151,11 @@ class SqliteEventStore:
         """身份合并：把旧用户的事件划归新用户。"""
         cur = await self.db.execute(
             "UPDATE events SET user_id=? WHERE user_id=?", (new_user_id, old_user_id))
+        return cur.rowcount or 0
+
+    async def delete_user(self, user_id: str) -> int:
+        """DSAR 删除：清除该用户全部事件。"""
+        cur = await self.db.execute("DELETE FROM events WHERE user_id=?", (user_id,))
         return cur.rowcount or 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
@@ -256,6 +262,9 @@ class MySqlEventStore:
     async def reassign_user(self, old_user_id: str, new_user_id: str) -> int:
         return await self._exec(
             "UPDATE events SET user_id=%s WHERE user_id=%s", (new_user_id, old_user_id))
+
+    async def delete_user(self, user_id: str) -> int:
+        return await self._exec("DELETE FROM events WHERE user_id=%s", (user_id,))
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"
