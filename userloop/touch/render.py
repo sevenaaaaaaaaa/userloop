@@ -101,6 +101,21 @@ def render_h5(spec: TouchSpec, cfg: dict, content: dict[str, Any] | None = None)
     cta_url = html.escape(spec.cta_url or "#")
     device = c.get("device") or "desktop"
     dwell = c.get("dwell") or {}
+    lead = c.get("lead") or {}
+    lead_form = (
+        '<form id="ul-lead" style="margin-top:22px;padding:16px;border:1px solid #e5e7eb;border-radius:12px;">'
+        '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">'
+        + html.escape(lead.get("title") or "留下联系方式，获取专属方案") + '</div>'
+        '<input id="ul-lead-email" type="email" placeholder="邮箱（可选）" '
+        'style="width:100%;height:42px;padding:0 12px;border:1px solid #d1d5db;border-radius:10px;margin-bottom:8px;">'
+        '<input id="ul-lead-phone" type="tel" placeholder="手机号（可选）" '
+        'style="width:100%;height:42px;padding:0 12px;border:1px solid #d1d5db;border-radius:10px;margin-bottom:10px;">'
+        '<button type="submit" style="width:100%;height:42px;border:0;border-radius:10px;background:#111827;color:#fff;'
+        'font-size:15px;font-weight:600;cursor:pointer;">提交</button>'
+        '<div id="ul-lead-ok" style="display:none;color:#16a34a;font-size:13px;margin-top:8px;">✓ 已收到，我们会尽快联系你</div>'
+        '</form>') if lead.get("enabled") else ""
+    lead_endpoint = html.escape(str(lead.get("endpoint") or ""))
+    lead_token_json = json.dumps(str(lead.get("token") or ""))
     secs = int(dwell.get("seconds") or 0)
     alt_text = html.escape(dwell.get("alt_cta_text") or "")
     alt_note = html.escape(dwell.get("alt_note") or "")
@@ -128,8 +143,25 @@ def render_h5(spec: TouchSpec, cfg: dict, content: dict[str, Any] | None = None)
        padding:14px 30px;border-radius:12px;font-size:16px;font-weight:600;">{cta_text}</a>
     <div id="ul-dwell-note" style="display:none;margin-top:10px;font-size:13px;color:#6b7280;">{alt_note}</div>
   </div>
+  {lead_form}
 </div>
 <script>
+// 留资（识别引导）：匿名访客留邮箱/手机 → 绑定为实名档案（匿名→实名合并）
+(function(){{
+  var f = document.getElementById('ul-lead');
+  if (!f) return;
+  f.addEventListener('submit', function(e){{
+    e.preventDefault();
+    var email = (document.getElementById('ul-lead-email')||{{}}).value || '';
+    var phone = (document.getElementById('ul-lead-phone')||{{}}).value || '';
+    if (!email && !phone) return;
+    fetch('{lead_endpoint}', {{method:'POST', headers:{{'Content-Type':'application/json'}},
+      body: JSON.stringify({{t: {lead_token_json}, email: email, phone: phone}})}})
+      .then(function(r){{ return r.json(); }})
+      .then(function(d){{ var ok=document.getElementById('ul-lead-ok'); if (ok) ok.style.display='block'; f.style.display='none'; }})
+      .catch(function(){{}});
+  }});
+}})();
 // 互动时长：停留 N 秒后强化 CTA（千人千面之"行为维度"）
 (function(){{
   var secs = {secs}; if (!secs) return;

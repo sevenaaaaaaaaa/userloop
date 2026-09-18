@@ -351,6 +351,52 @@ def create_app(data_dir: str | None = None) -> Any:
         rows = await store.list_events(limit=limit)
         return JSONResponse({"count": len(rows), "events": [_hydr(e) for e in rows]})
 
+    # ---- 身份识别 ----
+
+    @app.post(f"{prefix}/api/v1/identify")
+    async def identify(request: Request) -> JSONResponse:
+        """把渠道标识绑定到用户；若标识已属他人则合并（匿名→实名归一）。
+
+        入参：{distinct_id, email?, phone?, wechat_openid?, wecom_userid?}
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid json")
+        did = str(body.get("distinct_id") or "").strip()
+        if not did:
+            raise HTTPException(status_code=400, detail="缺少 distinct_id")
+        user = await store.find_user(did) or await store.upsert_user(did)
+        mapping = {"email": "email", "phone": "phone", "wechat_openid": "wechat_openid",
+                   "wechat_unionid": "wechat_unionid", "wecom_userid": "wecom_userid"}
+        merged = []
+        for field, type_ in mapping.items():
+            val = body.get(field)
+            if not val:
+                continue
+            owner = await store.resolve_identity(type_, str(val))
+            if owner and owner != user["id"]:
+                info = await store.merge_users(owner, user["id"])
+                if info.get("merged"):
+                    merged.append({"into": owner, "from": user["id"]})
+                user = await store.get_user(owner) or user
+            else:
+                await store.bind_identity(user["id"], type_, str(val), source="identify_api", verified=True)
+        return JSONResponse({"ok": True, "user_id": user["id"], "stage": user.get("stage"),
+                             "merged": merged})
+
+    @app.get(f"{prefix}/api/v1/identity/stats")
+    async def identity_stats() -> JSONResponse:
+        """识别率与漏斗（周报/看板共用口径）。"""
+        stages = await store.count_users_by_stage()
+        total = sum(stages.values()) or 1
+        anon = stages.get("visitor", 0)
+        cur = await store.db.execute("SELECT COUNT(DISTINCT user_id) c FROM identities WHERE type='email'")
+        with_email = int((await cur.fetchone())["c"])
+        return JSONResponse({"total": total, "anonymous_visitor": anon, "identified": total - anon,
+                             "identified_rate": round((total - anon) / total * 100, 1),
+                             "with_email": with_email})
+
     # ---- 触点回执（邮件打开/点击/退订；公开端点，自持追踪保证闭环数据自主）----
 
     async def _touch_event(request: Request, event: str, extra: dict | None = None) -> dict | None:
@@ -459,10 +505,54 @@ def create_app(data_dir: str | None = None) -> Any:
         content = pz.builtin_content(request, (user or {}).get("stage", "visitor"), cfg,
                                      {"title": page["title"], "body": page["body"],
                                       "subtitle": "", "cta_text": page["cta_text"]})
+        # 识别引导：匿名用户可留邮箱/手机（绑定即完成匿名→实名归一）
+        lead_cfg = (cfg.get("touch") or {}).get("lead_capture") or {}
+        if lead_cfg.get("enabled", True) and user and not user.get("email"):
+            content["lead"] = {"enabled": True, "endpoint": f"{prefix}/t/e/identify",
+                               "title": lead_cfg.get("title") or "留下联系方式，获取专属方案",
+                               "token": request.query_params.get("t", "")}
         page_html = render_h5(spec, cfg, content)["html"]
         resp = HTMLResponse(page_html, headers={"Cache-Control": "no-store"})
         resp.set_cookie("ul_seen", "1", max_age=90 * 86400, samesite="lax", httponly=True)
         return resp
+
+    @app.post(f"{prefix}/t/e/identify")
+    async def touch_identify(request: Request) -> JSONResponse:
+        """H5 留资/登录：带签名令牌说明"是谁的匿名档案"，绑定后即完成识别。"""
+        from userloop.touch.base import read_token
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        secret = str((cfg.get("touch") or {}).get("track_secret") or cfg.get("api_token") or "userloop")
+        data = read_token(secret, str(body.get("t") or ""))
+        if not data:
+            raise HTTPException(status_code=401, detail="签名无效或已过期")
+        user = await store.get_user(data.get("u", ""))
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        merged = []
+        for field, type_ in (("email", "email"), ("phone", "phone")):
+            val = body.get(field)
+            if not val:
+                continue
+            owner = await store.resolve_identity(type_, str(val))
+            if owner and owner != user["id"]:
+                info = await store.merge_users(owner, user["id"])
+                if info.get("merged"):
+                    merged.append(owner)
+                user = await store.get_user(owner) or user
+            else:
+                await store.bind_identity(user["id"], type_, str(val), source="h5_lead", verified=False)
+        # 留资即旅程事件（驱动 stage/Loop）
+        if body.get("email"):
+            await handle(store, ctx, {"distinct_id": user["distinct_id"], "event": "identify",
+                                      "props": {"page_id": (data.get("x") or {}).get("p"),
+                                                "email": body.get("email"), "phone": body.get("phone")},
+                                      "source": "h5_lead"})
+        return JSONResponse({"ok": True, "user_id": user["id"], "merged": merged,
+                             "message": "已记录，我们会尽快联系你"})
 
     @app.get(f"{prefix}/t/p/{{page_id}}/go")
     async def touch_page_go(page_id: str, request: Request) -> Any:
@@ -794,6 +884,40 @@ def create_app(data_dir: str | None = None) -> Any:
         return JSONResponse({"ok": True, "name": rep["name"], "path": path,
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
+
+    # ---- 预测层 API ----
+
+    @app.get(f"{prefix}/api/v1/predictions")
+    async def predictions(sort: str = "churn", limit: int = 20) -> JSONResponse:
+        from userloop.predict import engine as predict
+
+        rows = await predict.top(store, sort, limit=max(1, min(limit, 100)))
+        return JSONResponse({"sort": sort, "count": len(rows), "items": rows})
+
+    @app.get(f"{prefix}/api/v1/predictions/{{user_id}}")
+    async def prediction_detail(user_id: str) -> JSONResponse:
+        from userloop.predict import engine as predict
+
+        user = await store.get_user(user_id)
+        if not user:
+            # 支持用 distinct_id 查询
+            user = await store.find_user(user_id)
+            if not user:
+                raise HTTPException(status_code=404, detail="user not found")
+        row = await store.get_user_score(user["id"]) or await predict.compute(store, user)
+        return JSONResponse({"user_id": user["id"], "distinct_id": user["distinct_id"],
+                             "stage": user.get("stage"), **row})
+
+    @app.post(f"{prefix}/api/v1/predictions/recompute")
+    async def predictions_recompute(request: Request) -> JSONResponse:
+        from userloop.predict import engine as predict
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        n = await predict.run_batch(store, limit=int(body.get("limit") or 50))
+        return JSONResponse({"ok": True, "computed": n})
 
     # ---- 运维 API ----
 

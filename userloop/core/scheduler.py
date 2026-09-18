@@ -130,6 +130,14 @@ async def prune_data(store: Store, retention_days: int = 180, min_interval_hours
     return result
 
 
+async def recompute_predictions(store: Store, ctx: ExecutorContext) -> int:
+    """批量重算预测分数（优先近期活跃的实名用户，成本有界）。"""
+    ctx.store = store
+    from userloop.predict import engine as predict
+
+    return await predict.run_batch(store, limit=int(((ctx.config.get("predict") or {}).get("batch_size")) or 50))
+
+
 async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:
     """每周运营周报：生成 + 落盘（配置了 send 则推送）。"""
     ctx.store = store
@@ -170,6 +178,8 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
                   max_instances=1, coalesce=True)
     sched.add_job(run_ai_brain, "interval", minutes=30, args=[store, ctx], id="ai_brain",
                   max_instances=1, coalesce=True)
+    sched.add_job(recompute_predictions, "interval", minutes=60, args=[store, ctx],
+                  id="predictions", max_instances=1, coalesce=True)
     # 每周一 09:00（CST = UTC 01:00）生成运营周报
     from apscheduler.triggers.cron import CronTrigger
 

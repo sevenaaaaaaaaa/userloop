@@ -75,6 +75,12 @@ async def collect(store: Store, ctx: ExecutorContext, days: int = 7) -> dict[str
     for d in recent:
         ai_counts[d["status"]] = ai_counts.get(d["status"], 0) + 1
 
+    # 预测：高风险流失与高价值用户（可执行名单）
+    from userloop.predict import engine as predict
+
+    churn_top = await predict.top(store, "churn", limit=5)
+    ltv_top = await predict.top(store, "ltv", limit=5)
+
     # 渠道效果 + 被拦次数（体验指标）
     channels = await store.channel_engagement(days=days)
     blocks = await store.block_stats(days=days)
@@ -93,6 +99,13 @@ async def collect(store: Store, ctx: ExecutorContext, days: int = 7) -> dict[str
                "pending": ai_counts.get("pending_approval", 0)},
         "channels": channels,
         "blocks": blocks,
+        "predictions": {
+            "churn_top": [{"user": c["distinct_id"], "email": c.get("email"), "score": c["churn"],
+                           "stage": c.get("stage"), "why": (c.get("reasons") or {}).get("churn", [])[:1]}
+                          for c in churn_top],
+            "ltv_top": [{"user": c["distinct_id"], "email": c.get("email"), "score": c["ltv"],
+                         "tier": c.get("tier")} for c in ltv_top],
+        },
         "pending_threshold": int(cfg_of(ctx)["pending_alert_threshold"]),
     }
 
@@ -113,6 +126,8 @@ def _stats_brief(stats: dict[str, Any]) -> str:
         "AI决策": stats["ai"],
         "渠道效果": stats["channels"],
         "被门禁少打扰次数": stats["blocks"],
+        "预测·高流失风险": stats["predictions"]["churn_top"],
+        "预测·高价值用户": stats["predictions"]["ltv_top"],
     }, ensure_ascii=False)
 
 
@@ -183,6 +198,14 @@ def _render_markdown(stats: dict[str, Any], narrative: str) -> str:
     if ch:
         lines += [f"- 渠道（邮件）：送达 {ch.get('delivered', 0)} · 打开 {ch.get('email_open', 0)} · "
                   f"点击 {ch.get('email_click', 0)}"]
+    preds = stats.get("predictions") or {}
+    if preds.get("churn_top"):
+        lines += ["- 高流失风险（churn）：" + "；".join(
+            f"{c['user']} {c['score']}" + (f"（{c['why'][0]}）" if c.get("why") else "")
+            for c in preds["churn_top"][:3])]
+    if preds.get("ltv_top"):
+        lines += ["- 高价值（LTV）：" + "；".join(
+            f"{c['user']} {c['score']}({c.get('tier')})" for c in preds["ltv_top"][:3])]
     lines += [f"- **被门禁少打扰 {stats['blocks']['total']} 次**"
               + (f"（按渠道 {stats['blocks']['by_channel']}）" if stats["blocks"]["by_channel"] else "")]
     return "\n".join(lines) + "\n"

@@ -77,6 +77,7 @@ class EventStore(Protocol):
     async def recent_for_user(self, user_id: str, limit: int) -> list[dict]: ...
     async def newest_at(self) -> str | None: ...
     async def count_by_event_since(self, event: str, since: str) -> int: ...
+    async def reassign_user(self, old_user_id: str, new_user_id: str) -> int: ...
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict: ...
     async def total(self) -> int: ...
     async def close(self) -> None: ...
@@ -144,6 +145,12 @@ class SqliteEventStore:
             "SELECT COUNT(*) c FROM events WHERE event=? AND created_at>=?", (event, since))
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
+
+    async def reassign_user(self, old_user_id: str, new_user_id: str) -> int:
+        """身份合并：把旧用户的事件划归新用户。"""
+        cur = await self.db.execute(
+            "UPDATE events SET user_id=? WHERE user_id=?", (new_user_id, old_user_id))
+        return cur.rowcount or 0
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"
@@ -245,6 +252,10 @@ class MySqlEventStore:
         rows = await self._rows(
             "SELECT COUNT(*) c FROM events WHERE event=%s AND created_at>=%s", (event, since))
         return int(rows[0]["c"]) if rows else 0
+
+    async def reassign_user(self, old_user_id: str, new_user_id: str) -> int:
+        return await self._exec(
+            "UPDATE events SET user_id=%s WHERE user_id=%s", (new_user_id, old_user_id))
 
     async def prune(self, retention_days: int, noise_days: int, noise_events: tuple[str, ...]) -> dict:
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat(timespec="seconds") + "Z"

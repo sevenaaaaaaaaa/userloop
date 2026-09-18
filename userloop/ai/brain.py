@@ -95,6 +95,27 @@ async def build_context(store: Store, user: dict) -> dict[str, Any]:
     stats = user.get("stats") if isinstance(user.get("stats"), dict) else pj(user.get("stats"), {}) or {}
     stage = user.get("stage", "visitor")
     signals = derive_signals(user, stats, events, touches)
+    # 预测分数（可解释）：让 AI 决策参考流失风险/价值/购买倾向
+    try:
+        from userloop.predict import engine as predict
+
+        preds = await store.get_user_score(uid)
+        if preds:
+            import json as _json
+
+            signals["predictions"] = {
+                "churn": preds["churn"], "ltv": preds["ltv"], "propensity": preds["propensity"],
+                "tier": preds["tier"],
+                "why": (lambda r: {k: v[:1] for k, v in (r or {}).items()})(
+                    _json.loads(preds.get("reasons") or "{}")),
+            }
+        else:
+            # 无缓存则即时计算（轻量）
+            row = await predict.compute(store, user, events)
+            signals["predictions"] = {"churn": row["churn"], "ltv": row["ltv"],
+                                      "propensity": row["propensity"], "tier": row["tier"]}
+    except Exception:  # noqa: BLE001 —— 预测失败不影响决策
+        pass
     return {
         "user": {"stage": stage, "email": user.get("email") or None,
                  "stats": stats, "first_seen": user.get("first_seen"), "last_seen": user.get("last_seen")},

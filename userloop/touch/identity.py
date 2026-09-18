@@ -9,7 +9,8 @@ from typing import Any
 
 from userloop.core.store import Store, iso_now
 
-TYPES = ("email", "phone", "wechat_openid", "wechat_unionid", "wecom_userid", "websflow_visitor")
+TYPES = ("email", "phone", "wechat_openid", "wechat_unionid", "wecom_userid",
+         "websflow_visitor", "anonymous_id")
 
 
 async def bind(store: Store, user_id: str, type_: str, value: str,
