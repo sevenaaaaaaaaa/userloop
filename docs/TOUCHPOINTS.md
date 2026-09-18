@@ -113,6 +113,19 @@ UserLoop 自持追踪端点（保证闭环数据自主）：
 | **P2（待做）** | WebsFlow 多套版式模板体系、企微 1v1/客户群 | 版式可切换；企微私信纳入 Loop |
 | **P3** | 内容资产中心（模板版本化/审批/预览）、发件域预热与配额治理、多语言触点 | 模板变更可灰度；发件域预热曲线可控 |
 
+### 家族系统互通（全部走线上 API，2026-09-18 实测）
+
+| 系统 | 线上端点 | 鉴权 | 实测 |
+|---|---|---|---|
+| OpenFlow | `https://nownexts.com/api/plugin/userloop-bridge/*` | `X-UserLoop-Bridge` token | 邮件 250 Ok、退订进抑制名单、微信/企微出口就绪 |
+| WebsFlow | `https://nownexts.com/webflow/api/*` | JWT（服务账号 `userloop-bot`） | 建页 → 发布 → SSR 托管页；六维千面生效 |
+| MFlow | `https://nownexts.com/mflow/api/*` | `login` → `mflow_session` cookie（服务账号 `userloop-bot`，operator） | 旅程断点 → 建 item + 入队 loop → **其 agent 产稿 1813 字、质检 PASS、S4-qa**；`loop/detail` 可查状态 |
+| DeepSeek | `https://api.deepseek.com/v1` | Bearer（唯一外部第三方） | AI 文案/决策 |
+| MySQL | `127.0.0.1:3307` | 专用账号 | events 分层存储（基础设施，非服务 API） |
+
+纪律：**只调 API、不碰对方代码与数据**；对 MFlow 不干预其状态机（不调用 `item/advance`）；
+所有外部调用失败均降级（outbox / 内置页 / 跳过）并留痕，闭环不中断。
+
 ### 千人千面实现（2026-09-17）
 
 按 WebsFlow 引擎的两种机制分工，**避免多维度叠加导致区块重复渲染**：

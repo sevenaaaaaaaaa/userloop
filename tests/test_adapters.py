@@ -77,9 +77,11 @@ async def test_mflow_create_content(tmp_path) -> None:
     user = {"id": "u_abcdef", "email": "u2@x.com", "stage": "activated"}
     result = await execute_action(ctx, action, loop, user)
     assert result["ok"] is True and result["ref"] == "loop_abc"
+    assert result.get("register_ok") is True
     assert any("/api/login" in u for u in seen["calls"])
+    assert any("/api/item/upsert" in u for u in seen["calls"])
     assert any("/api/loop/create" in u for u in seen["calls"])
-    assert "sess1" in str(seen["bodies"]) or True
+    assert not any("/api/item/advance" in u for u in seen["calls"]), "不应干预 MFlow 状态机"
 
 
 async def test_mflow_register_topic(tmp_path) -> None:
