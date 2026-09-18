@@ -119,3 +119,10 @@ def test_model_api(tmp_path) -> None:
         assert "churn" in st["models"]
         r = client.post("/api/v1/predictions/train", json={"kinds": ["churn"]}).json()
         assert r["ok"] and "churn" in r["results"]
+
+
+def test_adaptive_window_shrinks_for_young_data() -> None:
+    assert mdl.adaptive_window(0) == (1, 1)
+    assert mdl.adaptive_window(3) == (1, 1)          # 3 天 → 1 天窗口
+    assert mdl.adaptive_window(30) == (10, 10)
+    assert mdl.adaptive_window(365) == (14, 14)      # 上限 14 天

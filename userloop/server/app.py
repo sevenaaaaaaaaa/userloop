@@ -1052,8 +1052,10 @@ def create_app(data_dir: str | None = None) -> Any:
         out = {}
         for kind in kinds:
             out[kind] = await mdl.train(store, cfg["data_dir"], kind,
-                                        reference_days=int(body.get("reference_days") or 14),
-                                        horizon_days=int(body.get("horizon_days") or 14))
+                                        reference_days=(int(body["reference_days"])
+                                                        if body.get("reference_days") else None),
+                                        horizon_days=(int(body["horizon_days"])
+                                                      if body.get("horizon_days") else None))
         return JSONResponse({"ok": True, "results": out})
 
     @app.get(f"{prefix}/api/v1/predictions/{{user_id}}")

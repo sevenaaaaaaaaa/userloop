@@ -142,9 +142,39 @@ def load(data_dir: str, kind: str) -> dict | None:
         return None
 
 
+async def data_span_days(store: Store) -> float:
+    """数据历史跨度（天）：用于自适应参考窗口（数据越新，窗口越短）。"""
+    try:
+        cur = await store.db.execute("SELECT MIN(created_at) c FROM events")
+        row = await cur.fetchone()
+        first_ts = None
+        if row is not None:
+            try:
+                first_ts = row["c"]           # aiosqlite.Row
+            except (TypeError, IndexError, KeyError):
+                first_ts = row[0] if row else None
+        first = _parse(first_ts)
+        if not first:
+            return 0.0
+        return max(0.0, (datetime.utcnow() - first).total_seconds() / 86400)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def adaptive_window(span_days: float, max_days: int = 14) -> tuple[int, int]:
+    """参考/预测窗口自适应：取跨度的 1/3（至少 1 天，至多 max_days）。"""
+    if span_days <= 0:
+        return 1, 1
+    w = int(max(1, min(max_days, span_days / 3)))
+    return w, w
+
+
 async def train(store: Store, data_dir: str, kind: str = "churn", limit: int = 1500,
-                reference_days: int = 14, horizon_days: int = 14) -> dict[str, Any]:
-    """训练并落盘；返回指标。kind: churn | propensity"""
+                reference_days: int | None = None, horizon_days: int | None = None) -> dict[str, Any]:
+    """训练并落盘；返回指标。kind: churn | propensity。
+
+    reference_days/horizon_days 为 None 时按**数据跨度自适应**（新库也能尽早训练）。
+    """
     cur = await store.db.execute(
         "SELECT * FROM users WHERE stage != 'visitor' ORDER BY last_seen DESC LIMIT ?", (limit,))
     users = [dict(r) for r in await cur.fetchall()]
@@ -152,11 +182,23 @@ async def train(store: Store, data_dir: str, kind: str = "churn", limit: int = 1
     for u in users:
         events_by_user[u["id"]] = await store.recent_events_for_user(u["id"], limit=500)
 
+    if reference_days is None or horizon_days is None:
+        span = await data_span_days(store)
+        auto_ref, auto_hz = adaptive_window(span)
+        reference_days = reference_days or auto_ref
+        horizon_days = horizon_days or auto_hz
+    else:
+        span = await data_span_days(store)
+
     label_event = None if kind == "churn" else "purchase"
     X, y = _build_dataset(users, events_by_user, label_event,
                           reference_days=reference_days, horizon_days=horizon_days)
     if len(X) < 20 or len(set(y)) < 2:
-        return {"ok": False, "reason": f"样本不足（{len(X)} 条，正例 {sum(y)}）", "samples": len(X)}
+        return {"ok": False, "samples": len(X), "positives": sum(y),
+                "window": {"reference_days": reference_days, "horizon_days": horizon_days,
+                           "data_span_days": round(span, 1)},
+                "reason": f"样本不足（{len(X)} 条，正例 {sum(y)}；数据跨度 {span:.1f} 天，"
+                          f"窗口 {reference_days}/{horizon_days} 天）"}
 
     split = max(1, int(len(X) * 0.8))
     model = train_logreg(X[:split], y[:split])
