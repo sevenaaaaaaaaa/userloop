@@ -2,7 +2,7 @@
 
 MFlow 现实约束（已实测）：
 - 无 API Token：auth.json（bcrypt 多用户）→ 必须 `POST {base}/api/login` 换 session cookie
-- `/api/loop/create` **必须带 item_id**（正则 `[a-z0-9][a-z0-9-]{1,78}`），只入队不立即产稿
+- `/api/loop/create` **必须带 item_id**（正则 `[a-z0-9][a-z0-9-]{1,78}`）；入队后其 agent 异步产稿并自推进状态机
 - 发布永远停在人工授权后：本适配器只创建 Loop/草稿，绝不触发发布
 
 动作：
@@ -123,11 +123,10 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
                                "type": payload.get("type", "blog"), "lang": payload.get("lang", "zh")},
                               transport=transport)
             if res.get("ok"):
-                item = await _call(cfg, "POST", "/api/item/advance",
-                                   {"id": item_id}, transport=transport)
+                # 不调用 item/advance：MFlow 自身会在产稿过程中推进状态机（S3→S4-qa），
+                # 外部再推进会造成状态冲突。我们只登记 item + 入队 loop。
                 result.update(ok=True, ref=res.get("id"), item_id=item_id,
-                              queued=res.get("queued", True), pipeline_ok=item.get("ok", False),
-                              register_ok=r1.get("ok", False))
+                              queued=res.get("queued", True), register_ok=r1.get("ok", False))
             else:
                 result.update(ok=False, error=res.get("error"))
         elif atype == "mflow.register_topic":
