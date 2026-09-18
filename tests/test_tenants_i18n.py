@@ -118,3 +118,22 @@ def test_email_and_h5_localized_content() -> None:
                    {"title": "T", "body": "B", "dwell": {}, "locale": "en-US",
                     "lead": {"enabled": True, "endpoint": "/x", "token": "t"}})
     assert "Submit" in h5["html"] and "Email (optional)" in h5["html"]
+
+
+async def test_new_tenant_never_inherits_base_event_storage(tmp_path) -> None:
+    """回归：新租户不得继承基础配置的 MySQL 事件存储（否则事件串库）。"""
+    base = {"data_dir": str(tmp_path),
+            "storage": {"events": {"backend": "mysql", "mysql": {"enabled": True, "host": "127.0.0.1",
+                                                                 "port": 3307, "user": "userloop",
+                                                                 "password": "x", "database": "userloop"}}}}
+    ts = TenantStores(base)
+    ts.registry.create("isolated", name="隔离租户")
+    t = ts.registry.get("isolated")
+    cfg = tenant_config(base, t)
+    assert cfg["storage"] == {}, "新租户必须默认 SQLite（不继承主租户事件库）"
+    # 主租户保留其自身配置
+    main_cfg = tenant_config(base, ts.registry.get(DEFAULT_TENANT))
+    assert main_cfg["storage"].get("events", {}).get("backend") == "mysql"
+    st = await ts.get("isolated")
+    assert getattr(st.events, "backend", "").startswith("sqlite")
+    await ts.close_all()
