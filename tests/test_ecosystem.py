@@ -216,3 +216,54 @@ def test_mflow_publish_is_public_path_with_token_guard(tmp_path) -> None:
         assert client.post("/api/v1/hub/mflow/publish?token=bad", json={"item_id": "a"}).status_code == 401
         ok = client.post("/api/v1/hub/mflow/publish?token=tk2", json={"item_id": "a"}).json()
         assert ok["ok"]
+
+
+def test_loops_trigger_by_template_and_trigger(tmp_path) -> None:
+    """被外部调用（OpenFlow 画布）触发 UserLoop Loop：按 template_id / event / stage。"""
+    (tmp_path / "config.json").write_text(json.dumps({"api_token": "tk3", "storage": {}}), encoding="utf-8")
+    from userloop.server.app import create_app
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        # 未带 token → 401
+        assert client.post("/api/v1/loops/trigger", json={"distinct_id": "u1"}).status_code == 401
+        # 按事件触发（模板 first_purchase_celebrate 是 stage_enter，改用显式 template_id）
+        r = client.post("/api/v1/loops/trigger?token=tk3",
+                        json={"template_id": "first_purchase_celebrate", "distinct_id": "ext_u",
+                              "email": "ext@x.com"}).json()
+        assert r["ok"] and r["created"], r
+        loops = client.get("/api/v1/loops").json()["loops"]
+        assert any(x["template_id"] == "first_purchase_celebrate" for x in loops)
+        # 冷却期内重复触发 → skipped
+        r2 = client.post("/api/v1/loops/trigger?token=tk3",
+                         json={"template_id": "first_purchase_celebrate", "distinct_id": "ext_u"}).json()
+        assert r2["ok"] and not r2["created"] and r2["skipped_cooldown"] >= 1
+        # 无匹配 → 明确报错
+        r3 = client.post("/api/v1/loops/trigger?token=tk3",
+                         json={"distinct_id": "u2", "event": "no_such_event"}).json()
+        assert r3["ok"] is False and "没有匹配的启用模板" in r3["error"]
+
+
+async def test_openflow_automation_posts_bridge_payload(tmp_path) -> None:
+    """openflow.automation 动作应把旅程断点发给桥接 /automation（flow_handle 入口）。"""
+    import httpx
+
+    ctx = _ctx(tmp_path, {"integrations": {"openflow": {"base_url": "http://of.test",
+                                                        "bridge_token": "bt"}}})
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.read() or b"{}")
+        return httpx.Response(200, json={"ok": True, "data": {"triggered": True, "triggers": ["ma_1"]}})
+
+    from userloop.actions.executors import execute_action
+
+    action = {"type": "openflow.automation",
+              "payload": {"_transport": httpx.MockTransport(handler), "event": "userloop_journey",
+                          "message": "旅程断点：churn_risk"}}
+    res = await execute_action(ctx, action, {"id": "l1", "template_id": "tpl"},
+                              {"id": "u1", "distinct_id": "anon_1", "email": "a@x.com"})
+    assert res["ok"] and "/api/plugin/userloop-bridge/automation" in seen["url"]
+    assert seen["body"]["event"] == "userloop_journey"
+    assert seen["body"]["visitor_id"] == "anon_1" and seen["body"]["template_id"] == "tpl"

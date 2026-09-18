@@ -82,11 +82,16 @@ class ImDriver:
 
         text = render_im(spec)
         im_cfg = ((ctx.config.get("touch") or {}).get("im") or {})
-        url = im_cfg.get("webhook_url")
+        # 动作级覆盖优先（对话式触达按入站渠道回出）
+        payload = (spec.vars or {}).get("payload") or {}
+        url = payload.get("webhook_url") or payload.get("url") or im_cfg.get("webhook_url")
         if not url:
             return TouchResult(False, self.channel, note="未配置 IM webhook")
         loop = {"id": spec.loop_id, "template_id": spec.template_id}
-        action = {"type": "feishu", "payload": {"url": url, "subject": spec.title, "text": text}}
+        feishu_payload = {"url": url, "subject": spec.title, "text": text}
+        if (spec.vars or {}).get("payload", {}).get("_transport"):
+            feishu_payload["_transport"] = spec.vars["payload"]["_transport"]
+        action = {"type": "feishu", "payload": feishu_payload}
         res = await execute_action(ctx, action, loop, user)
         return TouchResult(bool(res.get("ok")), self.channel, note=res.get("error", ""), extra=res)
 

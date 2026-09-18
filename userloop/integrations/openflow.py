@@ -79,10 +79,16 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
             result.update(ok=200 <= resp.status_code < 300, status_code=resp.status_code,
                           ref=f"inbound:{inbound_id or 'default'}")
         elif atype == "openflow.automation":
-            path = payload.get("path", "/api/plugin/userloop/automation")
+            # 默认走桥接插件的 /automation（内部调 flow_handle：CDP + 自动化 + 画布）
+            path = payload.get("path", "/api/plugin/userloop-bridge/automation")
             token = payload.get("token") or cfg.get("token") or ""
-            body = {"loop_id": loop.get("id"), "template_id": loop.get("template_id"),
-                    "user_id": user.get("id"), "message": text, "extra": payload.get("data", {})}
+            body = {
+                "event": payload.get("event") or "userloop_journey",
+                "visitor_id": user.get("distinct_id") or user.get("id"),
+                "email": user.get("email") or "",
+                "loop_id": loop.get("id"), "template_id": loop.get("template_id"),
+                "message": text, "extra": payload.get("data", {}),
+            }
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             async with _client(transport) as client:
                 resp = await client.post(f"{base.rstrip('/')}{path}", json=body, headers=headers)
