@@ -81,6 +81,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); }
 function toggleTheme(){
   const root=document.documentElement, dark=root.getAttribute('data-theme')==='dark';
@@ -122,16 +123,16 @@ function render(f){
     const a=pos[e.from], b=pos[e.to]; if(!a||!b) return;
     const x1=a.x+NW,y1=a.y+NH/2,x2=b.x,y2=b.y+NH/2,midx=(x1+x2)/2;
     svg+=`<path class="edge" d="M${x1},${y1} C${midx},${y1} ${midx},${y2} ${x2},${y2}"/>`;
-    if(e.label) svg+=`<text class="edge-label" x="${midx}" y="${(y1+y2)/2-5}" text-anchor="middle">${e.label}</text>`;
+    if(e.label) svg+=`<text class="edge-label" x="${midx}" y="${(y1+y2)/2-5}" text-anchor="middle">${esc(e.label)}</text>`;
   });
   nodes.forEach(n=>{
     const p=pos[n.id]; if(!p) return;
     const label=n.event?n.event:(n.stage?'stage:'+n.stage:(n.action?n.action.type:n.type));
     const sub={trigger:'触发',condition:'条件',action:'动作',delay:'延迟',exit:'结束'}[n.type]||n.type;
-    svg+=`<g class="node t-${n.type}" transform="translate(${p.x},${p.y})">
+    svg+=`<g class="node t-${esc(n.type)}" transform="translate(${p.x},${p.y})">
       <rect width="${NW}" height="${NH}"/>
-      <text x="11" y="20">${label}</text>
-      <text class="ntype" x="11" y="37">${sub} · ${n.id}</text></g>`;
+      <text x="11" y="20">${esc(label)}</text>
+      <text class="ntype" x="11" y="37">${esc(sub)} · ${esc(n.id)}</text></g>`;
   });
   svg+='</svg>';
   $('canvasWrap').innerHTML=svg;
@@ -146,7 +147,7 @@ function loadFlowObj(f){
 async function init(){
   const me=await j('api/auth/me'); $('me-name').textContent=me.login||me.name||me.username||'—';
   const r=await j(FLOW); const flows=r.flows||[];
-  $('flowSel').innerHTML=flows.map(f=>`<option value="${f.id}">${f.name||f.id}${f.enabled===false?'（停用）':''}</option>`).join('');
+  $('flowSel').innerHTML=flows.map(f=>`<option value="${esc(f.id)}">${esc(f.name||f.id)}${f.enabled===false?'（停用）':''}</option>`).join('');
   if(flows.length) loadFlow();
 }
 async function loadFlow(){
@@ -156,8 +157,8 @@ async function loadRuns(id){
   const r=await j(`${FLOW}/${id}`); const runs=r.runs||[];
   $('runs').innerHTML=runs.slice(0,8).map(run=>{
     const trace=typeof run.trace==='string'?JSON.parse(run.trace||'[]'):(run.trace||[]);
-    return `<tr><td class="mono">${run.id}</td><td class="s-${run.status}">${run.status}</td>
-      <td style="color:var(--muted);font-size:var(--fs-md)">${trace.map(t=>`<span class="tag mono">${t.type}·${t.node}</span> ${t.note}`).join(' → ')}</td></tr>`;
+    return `<tr><td class="mono">${esc(run.id)}</td><td class="s-${esc(run.status)}">${esc(run.status)}</td>
+      <td style="color:var(--muted);font-size:var(--fs-md)">${trace.map(t=>`<span class="tag mono">${esc(t.type)}·${esc(t.node)}</span> ${esc(t.note)}`).join(' → ')}</td></tr>`;
   }).join('')||'<tr><td colspan="3" style="color:var(--faint)">暂无执行记录（点「测试触发」试跑）</td></tr>';
 }
 async function save(){
