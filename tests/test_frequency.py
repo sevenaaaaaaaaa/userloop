@@ -263,3 +263,38 @@ async def test_touch_auto_records_resolved_channel(tmp_path) -> None:
             drv.httpx.AsyncClient = orig                     # type: ignore[assignment]
     finally:
         await store.close()
+
+
+async def test_scheduler_path_logs_block_and_sent(tmp_path) -> None:
+    """调度路径（无显式 store 传参）也必须能写频控台账与投递回执。"""
+    import httpx
+
+    store = Store(str(tmp_path / "sch.db"), {})
+    await store.connect()
+    try:
+        u = await store.upsert_user("sch1", email="sch1@x.com")
+        await store.log_touch(u["id"], "email", "touch.email", "tpl", "l")   # 先占一次触达
+
+        def handler(request):  # type: ignore[no-untyped-def]
+            return httpx.Response(200, json={"ok": True})
+
+        ctx = ExecutorContext(str(tmp_path), {
+            "touch": {"frequency": {"enabled": True, "quiet_hours": [0, 0], "global_gap_hours": 24}},
+            "api_token": "x"})
+        # 不显式设置 ctx.store → 走"调度路径"场景
+        from userloop.core.scheduler import process_due_actions
+        from userloop.core.store import new_id
+
+        loop_id = new_id("loop")
+        await store.insert_loop({"id": loop_id, "template_id": "tpl", "user_id": u["id"], "status": "running",
+                                 "trigger": {}, "context": {}, "created_at": "2026-09-18T00:00:00Z",
+                                 "updated_at": "2026-09-18T00:00:00Z"})
+        await store.insert_action({"id": new_id("act"), "loop_id": loop_id, "seq": 1, "type": "touch.email",
+                                   "payload": {"subject": "s", "text": "b"}, "delay_minutes": 0,
+                                   "status": "pending", "scheduled_at": "2026-09-18T00:00:00Z"})
+        await process_due_actions(store, ctx, limit=5)
+        blocks = await store.block_stats(days=1)
+        assert blocks["total"] >= 1, blocks          # 拦截被记入台账
+        assert ctx.store is store                     # 入口已自动挂载
+    finally:
+        await store.close()

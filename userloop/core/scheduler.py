@@ -33,6 +33,7 @@ def _ts(dt: datetime) -> str:
 
 async def process_due_actions(store: Store, ctx: ExecutorContext, limit: int = 50) -> list[dict]:
     """执行所有到期 pending 动作；每条 Loop 收敛到 verifying/verified。"""
+    ctx.store = store          # 让频控台账/回执/硬规则在调度路径同样生效
     due = await store.due_actions(iso(_utcnow()), limit=limit)
     results: list[dict] = []
     for action in due:
@@ -131,6 +132,7 @@ async def prune_data(store: Store, retention_days: int = 180, min_interval_hours
 
 async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:
     """每周运营周报：生成 + 落盘（配置了 send 则推送）。"""
+    ctx.store = store
     from userloop.ai import reporter
 
     rep = await reporter.build(store, ctx)
@@ -141,6 +143,7 @@ async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:
 
 async def run_ai_brain(store: Store, ctx: ExecutorContext) -> list[dict]:
     """AI 大脑批次任务（频次受限：默认每 30 分钟一批，每批成本有界）。"""
+    ctx.store = store
     from userloop.ai import brain as brain_mod
 
     brain_cfg = ((ctx.config.get("ai") or {}).get("brain") or {})
