@@ -159,7 +159,7 @@ def best_hour(events: list[dict], tz_offset: int = 8, min_samples: int = 5) -> i
 
 
 async def compute(store: Store, user: dict, events: list[dict] | None = None,
-                  tz_offset: int = 8) -> dict[str, Any]:
+                  tz_offset: int = 8, data_dir: str | None = None) -> dict[str, Any]:
     """计算并落库某用户的三个分数。"""
     if events is None:
         events = await store.recent_events_for_user(user["id"], limit=300)
@@ -176,24 +176,60 @@ async def compute(store: Store, user: dict, events: list[dict] | None = None,
     ch = churn_risk(user, events, stats)
     lt = ltv(user, stats)
     pr = propensity(user, events)
+
+    # 模型融合（有模型且样本足够时生效；否则纯规则）
+    model_info: dict[str, Any] = {}
+    if data_dir:
+        try:
+            from datetime import datetime as _dt
+
+            from userloop.predict import model as mdl
+
+            now = _dt.utcnow()
+            for kind, key, rule in (("churn", "churn", ch), ("propensity", "propensity", pr)):
+                m = mdl.load(data_dir, kind)
+                if not m:
+                    continue
+                sample_count = int((m.get("metrics") or {}).get("samples") or 0)
+                feats = mdl._features_at(events, user, now)
+                ms = mdl.predict_score(m, feats)
+                blended, w = mdl.blend(rule["score"], ms, sample_count)
+                rule["score"] = blended
+                rule["reasons"] = list(rule["reasons"]) + [
+                    f"模型({m.get('version','v2')}) 融合：模型分 {round(ms,3)} × 权重 {w}"
+                    f"（训练样本 {sample_count}，AUC {(m.get('metrics') or {}).get('auc','—')}）"]
+                model_info[key] = {"model_score": round(ms, 3), "weight": w,
+                                   "version": m.get("version"), "samples": sample_count}
+            for kind, key, rule in (("ltv", "ltv", lt),):
+                m = mdl.load(data_dir, kind)
+                if m:
+                    sample_count = int((m.get("metrics") or {}).get("samples") or 0)
+                    feats = mdl._features_at(events, user, now)
+                    blended, w = mdl.blend(rule["score"], mdl.predict_score(m, feats), sample_count)
+                    if w > 0:
+                        rule["score"] = blended
+                        model_info[key] = {"weight": w, "version": m.get("version")}
+        except Exception:  # noqa: BLE001 —— 模型失败不影响规则分
+            model_info = {}
     row = {"user_id": user["id"], "churn": ch["score"], "ltv": lt["score"],
            "propensity": pr["score"], "tier": lt["tier"],
            "best_hour": best_hour(events, tz_offset=tz_offset),
-           "reasons": {"churn": ch["reasons"], "ltv": lt["reasons"], "propensity": pr["reasons"]},
+           "reasons": {"churn": ch["reasons"], "ltv": lt["reasons"], "propensity": pr["reasons"],
+                        "model": model_info},
            "computed_at": iso_now()}
     await store.upsert_user_score(row)
     return row
 
 
 async def run_batch(store: Store, limit: int = 50, only_identified: bool = True,
-                    tz_offset: int = 8) -> int:
+                    tz_offset: int = 8, data_dir: str | None = None) -> int:
     """批量重算（优先近期活跃；只算实名用户，避免给匿名噪音打分）。"""
     cur = await store.db.execute(
         "SELECT * FROM users WHERE stage != 'visitor' ORDER BY last_seen DESC LIMIT ?" if only_identified
         else "SELECT * FROM users ORDER BY last_seen DESC LIMIT ?", (limit,))
     rows = [dict(r) for r in await cur.fetchall()]
     for u in rows:
-        await compute(store, u, tz_offset=tz_offset)
+        await compute(store, u, tz_offset=tz_offset, data_dir=data_dir)
     return len(rows)
 
 
