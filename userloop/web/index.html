@@ -80,6 +80,10 @@
       事件流
     </a>
     <div class="sb-grp">实验与编排</div>
+    <a class="nv" href="#sec-evolve" data-sec="sec-evolve">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/><path d="M12 8v4l3 2"/></svg>
+      自进化
+    </a>
     <a class="nv" href="#sec-report" data-sec="sec-report">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h5M9 8h4"/></svg>
       运营周报
@@ -254,6 +258,25 @@
       </div>
     </section>
 
+    <section id="sec-evolve">
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>自诊断</h3><span class="p-sub" id="evoSub">每日自检 + 确定性规则</span>
+            <button class="btn ghost sm" onclick="evoLoad(true)">重新自检</button></div>
+          <div class="p-body"><table><thead><tr><th>级别</th><th>问题</th><th>证据</th><th>建议</th></tr></thead><tbody id="evoIssues"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>改进提案（AI）</h3><span class="p-sub">每周自动生成 · 人工审批</span>
+            <button class="btn primary sm" onclick="evoPropose()">生成提案</button></div>
+          <div class="p-body"><table><thead><tr><th>提案</th><th>类型</th><th>影响</th><th>风险</th><th>操作</th></tr></thead><tbody id="evoProps"></tbody></table></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="p-head"><h3>Lessons（错误只犯一次）</h3><span class="p-sub">自进化沉淀</span></div>
+        <div class="p-body" id="evoLessons" style="font-size:var(--fs-lg);line-height:1.9"></div>
+      </div>
+    </section>
+
     <section id="sec-report">
       <div class="panel">
         <div class="p-head">
@@ -293,7 +316,8 @@ function currentLang(){ try { return localStorage.getItem('ul_lang') || 'zh-CN';
 function toggleLang(){
   const next = currentLang() === 'zh-CN' ? 'en-US' : 'zh-CN';
   try { localStorage.setItem('ul_lang', next); } catch(e){}
-  applyLang(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
+  applyLang();
+evoLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
 }
 function applyLang(){
   const dict = UL_I18N[currentLang()] || UL_I18N['zh-CN'];
@@ -497,6 +521,48 @@ function render(r){
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
 }
 
+let evoData = null;
+async function evoLoad(refresh){
+  if (refresh) toast('自检中…');
+  const r = await (await fetch('api/v1/evolve/status')).json();
+  evoData = r;
+  const dg = r.diagnostics || {};
+  $('evoSub').textContent = `${new Date().toLocaleTimeString('zh-CN',{hour12:false})} · ` +
+    `高 ${((dg.counts||{}).high)||0} · 中 ${((dg.counts||{}).medium)||0} · 低 ${((dg.counts||{}).low)||0}` +
+    ` · 识别率 ${((r.telemetry||{}).identified_rate)}%`;
+  $('evoIssues').innerHTML = (dg.issues||[]).map(i=>{
+    const cls = i.severity==='high'?'danger':i.severity==='medium'?'warn':'';
+    return `<tr><td><span class="tag ${cls}">${i.severity}</span></td><td>${i.title}<div class="mono" style="color:var(--faint)">${i.code}</div></td>
+      <td class="mono" style="max-width:220px;color:var(--muted)">${JSON.stringify(i.evidence).slice(0,90)}</td>
+      <td style="color:var(--muted)">${i.recommendation}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--ok)">✓ 无问题</td></tr>';
+  const pend = (r.proposals||[]).filter(p=>p.status==='pending');
+  $('evoProps').innerHTML = pend.map(p=>`
+    <tr><td>${p.title}<div class="mono" style="color:var(--faint)">${p.rationale.slice(0,80)}</div></td>
+    <td><span class="tag">${p.kind}${p.apply_key?' · '+p.apply_key:''}</span></td>
+    <td style="color:var(--muted)">${(p.impact||'').slice(0,70)}</td>
+    <td><span class="tag ${p.risk==='low'?'ok':p.risk==='high'?'danger':'warn'}">${p.risk}</span></td>
+    <td><button class="btn primary sm" onclick="evoApply('${p.id}')">应用</button>
+        <button class="btn ghost sm" onclick="evoReject('${p.id}')">驳回</button></td></tr>`).join('')
+    || '<tr><td colspan="5" style="color:var(--faint)">暂无待批提案（点「生成提案」）</td></tr>';
+  $('evoLessons').innerHTML = (r.lessons||[]).slice(0,8).map(l=>`<div style="margin:4px 0">• <b>${l.title}</b> <span class="mono" style="color:var(--faint)">${l.source}</span></div>`).join('')
+    || '<div style="color:var(--faint)">暂无 Lessons</div>';
+}
+async function evoPropose(){
+  toast('AI 分析遥测与问题中…');
+  const r = await (await fetch('api/v1/evolve/propose', {method:'POST'})).json();
+  toast(r.ok ? `生成 ${r.count} 条提案` : ('失败：'+(r.error||'')));
+  evoLoad();
+}
+async function evoApply(id){
+  const r = await (await fetch(`api/v1/evolve/proposals/${id}/apply`, {method:'POST'})).json();
+  toast(r.ok ? (r.kind==='config' ? `已应用 ${r.key}=${r.new_value}（可回滚 ${r.old_value}）` : '已登记为待办') : ('失败：'+(r.error||'')));
+  evoLoad();
+}
+async function evoReject(id){
+  await fetch(`api/v1/evolve/proposals/${id}/reject`, {method:'POST'});
+  toast('已驳回'); evoLoad();
+}
 async function sgDraft(){
   const prompt = $('sgPrompt').value.trim();
   if (!prompt) { toast('先写一句需求'); return; }
@@ -654,6 +720,7 @@ rpLoad();
 sgList();
 prModel();
 applyLang();
+evoLoad();
 </script>
 </body>
 </html>
