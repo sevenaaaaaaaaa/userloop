@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from userloop.ai import guardrails as G
@@ -239,6 +239,20 @@ async def run_for_user(
     if intent == "noop":
         return await _audit(store, user, {**decision, "intent": "noop", "status": "noop",
                                           "risk": "low", "channel": "none"})
+
+    # 2b) 冷却预检：该意图在冷却期内 → 不再生成待批决策（防审批队列被重复项撑爆）
+    cooldown_hours = int(spec.get("cooldown_hours", 24))
+    since = (datetime.utcnow() - timedelta(hours=cooldown_hours)).isoformat(timespec="seconds") + "Z"
+    if await store.has_recent_loop(f"ai.{intent}", user["id"], since) and not force:
+        try:
+            await store.log_block(user["id"], spec.get("channel", "unknown"),
+                                  f"AI {intent} 冷却期内（{cooldown_hours}h）")
+        except Exception:  # noqa: BLE001
+            pass
+        return await _audit(store, user, {**decision, "intent": "noop", "status": "skipped",
+                                          "risk": "low", "channel": "none",
+                                          "reasoning": f"[冷却] 近 {cooldown_hours}h 内已执行 ai.{intent}，"
+                                                       f"本轮不重复触达。原判：{decision['reasoning'][:120]}"})
 
     # 4) 风险门：low 自动执行 / medium 待审批 / high 阻断
     payload = _render_intent(intent, decision, user)

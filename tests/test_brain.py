@@ -37,6 +37,10 @@ async def store(tmp_path):
     await s.close()
 
 
+async def _async(value):
+    return value
+
+
 def _ctx(tmp_path, cfg=None) -> ExecutorContext:
     return ExecutorContext(str(tmp_path), cfg or AI_CFG)
 
@@ -285,3 +289,41 @@ async def test_reporter_builds_with_narrative(tmp_path) -> None:
         assert rep2["degraded"] is True and "硬指标附录" in rep2["markdown"]
     finally:
         await store.close()
+
+
+async def test_cooldown_prevents_pending_queue_bloat(store: Store, tmp_path) -> None:
+    """冷却期内不重复生成待批决策（防止审批队列被同一用户的重复项撑爆）。"""
+    import httpx as _httpx
+
+    user = await store.upsert_user("cd1", email="cd1@x.com")
+    await store.update_user(user["id"], stage="activated")
+    user = await store.get_user(user["id"])
+    # 专门验证"冷却"这条路径：把 AI 护栏打桩为放行（否则会被频控/静默期先拦）
+    from userloop.ai import guardrails as G
+
+    real_precheck = G.precheck
+    G.precheck = lambda *a, **kw: _async({"ok": True, "reason": "ok"})  # type: ignore[assignment]
+    ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t", "brain": {"enabled": True, "quiet_hours": [0, 0]}}})
+    try:
+        first = await brain.run_for_user(store, ctx, user, transport=_llm("send_email"))
+    finally:
+        G.precheck = real_precheck  # type: ignore[assignment]
+    assert first["status"] == "pending_approval"
+    # 批准第一次（产生 ai.send_email loop）
+    from userloop.ai import brain as b
+
+    await b.execute_intent(store, ctx, user, "send_email",
+                           {"reasoning": "t", "expected_effect": ""},
+                           payload=first["payload"])
+    # 冷却期内再跑 → 直接 skipped，不再进待批队列
+    G.precheck = lambda *a, **kw: _async({"ok": True, "reason": "ok"})  # type: ignore[assignment]
+    try:
+        second = await brain.run_for_user(store, ctx, await store.get_user(user["id"]),
+                                          transport=_llm("send_email"))
+    finally:
+        G.precheck = real_precheck  # type: ignore[assignment]
+    assert second["status"] == "skipped" and "冷却" in second["reasoning"]
+    assert second["intent"] == "noop"
+    pending = [d for d in await store.list_ai_decisions(status="pending_approval")
+               if d["user_id"] == user["id"]]
+    assert len(pending) == 1, "不应新增第二条待批决策"
