@@ -35,15 +35,22 @@
 | ④ 效果回流 | 邮件打开/点击/退订 → UserLoop 事件总线；MFlow 发布 webhook → ingest | 已实测（`email_open/click/unsub`）|
 | ④ 效果回流 | OpenFlow CDP 回推（`openflow.webhook_insight`，HMAC） | 已实测（`userloop_signal` 落 OpenFlow）|
 
-### 尚未打通的（下一步的生态工作）
+### 本轮（N1 首批）已打通 ✅
+
+| 链路 | 实现 | 实测 |
+|---|---|---|
+| **inFlow 洞察 → UserLoop Loop** | `userloop/integrations/inflow.py`：拉取洞察（线上 `https://nownexts.com/inflow/api/v1/insights?workspace_id=insflow-main`）→ 按类型套**配方**（20 类）→ 复用 `copilot.validate` 白名单校验 → 生成 **Loop 草稿**（默认 disabled）→ 回执 `ack` 让洞察进入 acknowledged | ✅ 真实拉取 20 条洞察，全部生成对应草稿（RFM 风险→挽回、留存下降→召回、旅程缺口→激活、舆情负面→危机响应、LTV:CAC→高价值运营、关键词机会→MFlow 内容…）；回执后 inFlow 状态流转（下一批继续流入）|
+| **MFlow 发布 → UserLoop 验证窗口** | `POST /api/v1/hub/mflow/publish` 登记发布 + 开窗（默认 14 天）→ 到期对比窗口内外归因事件（utm_campaign / url，**OR 去重**）→ verdict 写 `feedback`（模板 `content.mflow`）| ✅ 发布登记 → 窗口内命中 8 事件 → `effective`（去重正确）；内容效果与实验/触达**同一张回流表**可横向对比 |
+| 定时任务 | 洞察每 30 分钟同步、内容每 6 小时检查到期、均已按租户遍历 | ✅ |
+
+### 尚未打通（N1 剩余）
 
 | 缺口 | 价值 | 依赖 |
 |---|---|---|
-| **inFlow → UserLoop**：洞察/竞品异动/流量诊断 → 自动生成运营 Loop 建议 | 让"情报"直接变成"动作"，闭环最短 | inFlow 动作接口（可先用其 webhook/API） |
-| **UserLoop → OpenFlow 画布**：把 UserLoop 的 Loop 作为 OpenFlow 自动化节点 | 双引擎互调 | OpenFlow 连接器（已支持，配 base_url 即可） |
-| **跨系统统一身份**：OpenFlow member_id ↔ UserLoop user ↔ WebsFlow visitor ↔ MFlow 选题 | 全域归因 | 各系统 id 映射（UserLoop 身份图谱已就绪，缺对方回传） |
-| **MFlow 发布结果回流** → UserLoop 验证窗口（内容是否带来转化） | 内容效果归因 | MFlow 发布 webhook（其 `run/cms.json` 配置即可） |
-| **WebsFlow 页内事件回流**（浏览/表单）→ `/api/v1/hub/ingest` | 落地页优化闭环 | WebsFlow 事件上报（其 events 路由可转发） |
+| **UserLoop → OpenFlow 画布**：Loop 作为 OpenFlow 自动化节点 | 双引擎互调 | OpenFlow 连接器（已支持，配 base_url 即可） |
+| **跨系统统一身份**：OpenFlow member_id ↔ UserLoop user ↔ WebsFlow visitor | 全域归因 | 各系统回传 id（UserLoop 身份图谱已就绪） |
+| **WebsFlow 页内事件回流**（浏览/表单）→ `/api/v1/hub/ingest` | 落地页优化闭环 | WebsFlow 事件上报转发 |
+| **MFlow 侧配置**：`run/cms.json` 的 webhook 指向 `https://nownexts.com/userloop/api/v1/hub/mflow/publish` | 自动化回流（当前为手动/模拟验证）| MFlow 一行配置 |
 
 ## 二、UserLoop 在产品矩阵中的角色与护城河
 

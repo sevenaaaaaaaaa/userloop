@@ -95,6 +95,29 @@
   - 现象：`GET /predictions/model` 返回 404（被 `/{user_id}` 抢先匹配）
   - 处理：静态路径路由必须先于参数路由注册
 
+## 生态与接口（本轮 N1 新增）
+
+- **inFlow 洞察有生命周期：`new → acknowledged`**
+  - 现象：第一次同步 10 条后再同步又"新建"10 条
+  - 原因：我们对每条洞察回执 `ack`，它们已离开 `new` 状态；下一批是新的 new 洞察
+  - 结论：这是**正确行为**（回执通道有效），但同步要按 `external_id` 去重（已做，`UNIQUE(source, external_id)`）
+
+- **内容归因计数查错了库**
+  - 现象：窗口内注入 8 条命中事件，`hits=0`、verdict 恒 neutral
+  - 原因：`count_events_matching` 用 `store.db`（SQLite），而事件在 **MySQL 事件后端**
+  - 处理：计数下沉到 EventStore 接口（SQLite/MySQL 双实现），store 统一委托
+  - 验证：命中数 8（等于注入数）→ verdict `effective`
+
+- **同一事件命中多个归因信号会重复计数**
+  - 现象：`hits=16`（8 条事件 × 2 个信号 utm_campaign + url）
+  - 处理：改为 `count_matching_any`（`props LIKE a OR props LIKE b`，按事件去重）
+  - 验证：`test_attribution_counts_each_event_once`
+
+- **配方动作必须在白名单内**
+  - 现象：inFlow 配方里的 `notify_team` 被 Copilot 校验丢弃成 `ai.compose`
+  - 处理：统一用白名单内的 `feishu`（团队通知）/`touch.*`/`mflow.*`/`openflow.*`
+  - 结论：**AI/配置产出的动作都要过白名单**，否则会被静默改写
+
 ## 生态与接口
 
 - **OpenFlow 插件钩子用错 API**
