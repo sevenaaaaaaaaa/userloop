@@ -149,6 +149,24 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS evolution_proposals (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evolution_lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    fix TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS segments (
     id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
@@ -700,6 +718,54 @@ class Store:
             "WHERE l.user_id=? AND a.executed_at>=? AND a.type NOT IN ('noop')", (user_id, since))
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
+
+    # ---- 自进化（提案 / Lessons）----
+
+    async def put_evolution_proposal(self, proposal: dict, status: str = "pending") -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO evolution_proposals (id, data, status, created_at, updated_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET data=excluded.data, status=excluded.status, "
+            "updated_at=excluded.updated_at",
+            (proposal["id"], j(proposal), status, iso_now(), iso_now()),
+        )
+
+    async def list_evolution_proposals(self, status: str | None = None, limit: int = 30) -> list[dict]:
+        assert self.db
+        if status:
+            cur = await self.db.execute(
+                "SELECT data, status FROM evolution_proposals WHERE status=? "
+                "ORDER BY created_at DESC LIMIT ?", (status, limit))
+        else:
+            cur = await self.db.execute(
+                "SELECT data, status FROM evolution_proposals ORDER BY created_at DESC LIMIT ?", (limit,))
+        out = []
+        for r in await cur.fetchall():
+            d = pj(r["data"], {}) or {}
+            d["status"] = r["status"]
+            out.append(d)
+        return out
+
+    async def set_evolution_status(self, proposal_id: str, status: str) -> None:
+        assert self.db
+        await self.db.execute("UPDATE evolution_proposals SET status=?, updated_at=? WHERE id=?",
+                              (status, iso_now(), proposal_id))
+
+    async def add_lesson(self, lesson: dict) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO evolution_lessons (category, title, detail, fix, source, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (lesson.get("category", ""), lesson["title"], lesson.get("detail", ""),
+             lesson.get("fix", ""), lesson.get("source", "manual"), iso_now()),
+        )
+
+    async def list_lessons(self, limit: int = 100) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT category, title, detail, fix, source, created_at FROM evolution_lessons "
+            "ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in await cur.fetchall()]
 
     async def put_segment(self, seg: dict) -> None:
         assert self.db

@@ -286,6 +286,124 @@ def report(data_dir: str | None, days: int, send: bool) -> None:
     asyncio.run(_run())
 
 
+@main.group()
+def evolve() -> None:
+    """自进化：遥测 / 自诊断 / AI 提案 / 应用 / Lessons。"""
+
+
+@evolve.command("status")
+@click.option("--data-dir", default=None)
+def evolve_status(data_dir: str | None) -> None:
+    """采集遥测 + 自诊断 + 提案/ Lessons 概览。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.core.store import Store
+        from userloop.evolve import engine as evo
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
+        try:
+            tel = await evo.collect_telemetry(store, ctx)
+            dg = await evo.diagnose(store, ctx)
+            console.print_json(json.dumps({"telemetry": tel, "diagnostics": dg}, ensure_ascii=False))
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@evolve.command("propose")
+@click.option("--data-dir", default=None)
+@click.option("--apply", "do_apply", is_flag=True, help="自动应用低风险 config 类提案")
+def evolve_propose(data_dir: str | None, do_apply: bool) -> None:
+    """生成改进提案（AI）；--apply 自动应用低风险配置类。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.core.store import Store
+        from userloop.evolve import engine as evo
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
+        try:
+            res = await evo.propose(store, ctx)
+            for p in res.get("proposals") or []:
+                console.print(f"[bold]{p['id']}[/] [{p['kind']}/{p['risk']}] {p['title']}")
+                console.print(f"  理由：{p['rationale'][:120]}")
+                console.print(f"  影响：{p['impact'][:100]} | 验证：{p['validation'][:100]}")
+                if do_apply and p["kind"] == "config" and p.get("risk") == "low":
+                    console.print(f"  → 自动应用：{await evo.apply_proposal(store, ctx, p['id'])}")
+            if not (res.get("proposals") or []):
+                console.print("（本轮无值得改进的提案）")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@evolve.command("apply")
+@click.argument("proposal_id")
+@click.option("--data-dir", default=None)
+def evolve_apply(proposal_id: str, data_dir: str | None) -> None:
+    """应用指定提案（配置类即时生效；代码类登记为待办）。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.core.store import Store
+        from userloop.evolve import engine as evo
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
+        try:
+            console.print_json(json.dumps(await evo.apply_proposal(store, ctx, proposal_id), ensure_ascii=False))
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@evolve.command("lessons")
+@click.option("--data-dir", default=None)
+@click.option("--write", is_flag=True, help="写入 docs/LESSONS.md")
+def evolve_lessons(data_dir: str | None, write: bool) -> None:
+    """查看/导出 Lessons（错误只犯一次）。"""
+
+    async def _run() -> None:
+        from userloop.core.store import Store
+        from userloop.evolve import engine as evo
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        try:
+            md = evo.render_lessons_md(await store.list_lessons(limit=200))
+            if write:
+                import os
+
+                path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                    "docs", "LESSONS.md")
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(md)
+                console.print(f"已写入 {path}")
+            else:
+                console.print(md)
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.option("--data-dir", default=None)
 def stats(data_dir: str | None) -> None:

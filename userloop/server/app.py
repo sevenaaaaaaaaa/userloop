@@ -920,6 +920,62 @@ def create_app(data_dir: str | None = None) -> Any:
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
 
+    # ---- 自进化（遥测/诊断/提案/Lessons）----
+
+    @app.get(f"{prefix}/api/v1/evolve/status")
+    async def evolve_status() -> JSONResponse:
+        from userloop.evolve import engine as evo
+
+        tel = await evo.collect_telemetry(store, ctx)
+        dg = await evo.diagnose(store, ctx)
+        props = await store.list_evolution_proposals(limit=20)
+        lessons = await store.list_lessons(limit=20)
+        return JSONResponse({"telemetry": tel, "diagnostics": dg,
+                             "proposals": props, "lessons": lessons})
+
+    @app.get(f"{prefix}/api/v1/evolve/diagnose")
+    async def evolve_diagnose() -> JSONResponse:
+        from userloop.evolve import engine as evo
+
+        return JSONResponse(await evo.diagnose(store, ctx))
+
+    @app.post(f"{prefix}/api/v1/evolve/propose")
+    async def evolve_propose() -> JSONResponse:
+        from userloop.evolve import engine as evo
+
+        return JSONResponse(await evo.propose(store, ctx))
+
+    @app.post(f"{prefix}/api/v1/evolve/proposals/{{proposal_id}}/apply")
+    async def evolve_apply(proposal_id: str) -> JSONResponse:
+        from userloop.evolve import engine as evo
+
+        return JSONResponse(await evo.apply_proposal(store, ctx, proposal_id))
+
+    @app.post(f"{prefix}/api/v1/evolve/proposals/{{proposal_id}}/reject")
+    async def evolve_reject(proposal_id: str) -> JSONResponse:
+        await store.set_evolution_status(proposal_id, "rejected")
+        return JSONResponse({"ok": True})
+
+    @app.get(f"{prefix}/api/v1/evolve/lessons", response_class=HTMLResponse)
+    async def evolve_lessons() -> HTMLResponse:
+        from userloop.evolve import engine as evo
+
+        return HTMLResponse(_md_to_html(evo.render_lessons_md(await store.list_lessons(limit=100))))
+
+    @app.post(f"{prefix}/api/v1/evolve/lessons")
+    async def evolve_add_lesson(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not str(body.get("title") or "").strip():
+            raise HTTPException(status_code=400, detail="缺少 title")
+        await store.add_lesson({"category": str(body.get("category") or "manual"),
+                                "title": str(body["title"])[:120],
+                                "detail": str(body.get("detail") or "")[:600],
+                                "fix": str(body.get("fix") or "")[:600], "source": "manual"})
+        return JSONResponse({"ok": True})
+
     # ---- 多租户 ----
 
     @app.get(f"{prefix}/api/v1/tenants")

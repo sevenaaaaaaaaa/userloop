@@ -229,6 +229,18 @@ async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
                 out[tid] = {k: await mdl.train(st, tcfg["data_dir"], k) for k in ("churn", "propensity")}
             elif job == "report":
                 out[tid] = await weekly_report(st, tctx)
+            elif job == "evolve_daily":
+                from userloop.evolve import engine as evo
+
+                tel = await evo.collect_telemetry(st, tctx)
+                dg = await evo.diagnose(st, tctx)
+                out[tid] = {"identified_rate": tel["identified_rate"],
+                            "issues": dg["counts"], "ok": dg["ok"]}
+            elif job == "evolve_propose":
+                from userloop.evolve import engine as evo
+
+                r = await evo.propose(st, tctx)
+                out[tid] = {"proposals": r.get("count", 0), "ok": r.get("ok")}
         except Exception as exc:  # noqa: BLE001
             out[tid] = {"error": str(exc)[:160]}
     await tenants.close_all()
@@ -262,4 +274,9 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
 
     sched.add_job(run_all_tenants, CronTrigger(day_of_week="mon", hour=1, minute=0, timezone="UTC"),
                   args=[ctx, "report"], id="weekly_report", max_instances=1, coalesce=True)
+    # 自进化：每日遥测+诊断；每周一 02:00 生成改进提案
+    sched.add_job(run_all_tenants, CronTrigger(hour=2, minute=0, timezone="UTC"),
+                  args=[ctx, "evolve_daily"], id="evolve_daily", max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, CronTrigger(day_of_week="mon", hour=2, minute=30, timezone="UTC"),
+                  args=[ctx, "evolve_propose"], id="evolve_propose", max_instances=1, coalesce=True)
     return sched
