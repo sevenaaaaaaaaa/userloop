@@ -24,12 +24,12 @@
       </button>
     </div>
     <div class="bar-end">
-      <span class="chip"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span><span id="live-state">调度运行中</span></span>
+      <span class="chip hide-xs"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span><span id="live-state">调度运行中</span></span>
       <button class="chip act" id="langBtn" onclick="toggleLang()" title="切换语言 / Language">中/EN</button>
       <button class="chip act" onclick="toggleTheme()" title="切换主题">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg>
       </button>
-      <span class="chip" id="me-chip" title="当前登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg><span id="me-name">—</span></span>
+      <span class="chip" id="me-chip" title="当前登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg><span id="me-name" class="nm">—</span></span>
       <button class="chip act" onclick="logout()" title="退出登录">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 12H4m0 0 4-4m-4 4 4 4"/><path d="M14 4h5v16h-5"/></svg>
       </button>
@@ -338,6 +338,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = s => (s || '').replace('T', ' ').slice(0, 19);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
 const UL_I18N = {
@@ -494,7 +495,7 @@ function render(r){
       $('churnTop').innerHTML = (ch.items||[]).map(x=>`
         <tr><td class="mono">${x.distinct_id}</td><td>${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
         <td class="mono" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${x.churn}</td>
-        <td style="color:var(--muted);max-width:260px">${((x.reasons||{}).churn||[])[0]||'—'}</td>
+        <td class="wrap" style="color:var(--muted);max-width:280px"><div class="clamp2" title="${esc(((x.reasons||{}).churn||[])[0]||'')}">${((x.reasons||{}).churn||[])[0]||'—'}</div></td>
         <td><button class="btn ghost sm" onclick="prDecide('${x.distinct_id}')">让 AI 决策</button></td></tr>`).join('')
         || '<tr><td colspan="5" style="color:var(--faint)">暂无数据（点「立即重算一批」）</td></tr>';
       $('ltvTop').innerHTML = (lt.items||[]).map(x=>`
@@ -554,7 +555,7 @@ function render(r){
       <td>${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
       <td class="mono">${x.intent}</td>
       <td><span class="tag ${st}">${x.risk} / ${x.status}</span></td>
-      <td style="color:var(--muted);max-width:320px">${x.reasoning||''}</td>
+      <td class="wrap" style="color:var(--muted);max-width:360px"><div class="clamp3" title="${esc(x.reasoning||'')}">${x.reasoning||''}</div></td>
       <td class="mono">${(x.confidence||0).toFixed(2)}</td><td>${ops}</td></tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
 }
@@ -562,7 +563,7 @@ function render(r){
 async function asLoad(){
   const [r, v] = await Promise.all([j('api/v1/assets/packs'), j('api/v1/assets/versions?limit=15')]);
   $('asPacks').innerHTML = (r.packs||[]).map(p=>`
-    <tr><td><b>${p.name}</b><div class="mono" style="color:var(--faint)">${p.description||''}</div></td>
+    <tr><td class="wrap"><b>${p.name}</b><div class="cellsub">${esc(p.description||'')}</div></td>
     <td><span class="tag">${p.industry}</span></td>
     <td class="mono">模板 ${p.counts.loop_templates} · 画布 ${p.counts.canvas_flows} · 实验 ${p.counts.experiments} · 分群 ${p.counts.segments}</td>
     <td class="mono">${(p.requires||[]).join(',')||'—'}</td>
@@ -570,10 +571,10 @@ async function asLoad(){
         <button class="btn primary sm" onclick="asApply('${p.id}')">应用</button></td></tr>`).join('')
     || '<tr><td colspan="5" style="color:var(--faint)">无资产包</td></tr>';
   $('asVersions').innerHTML = (v.versions||[]).map(x=>`
-    <tr><td class="mono">${x.asset_id.slice(0,22)}</td><td><span class="tag">${x.asset_type}</span></td>
+    <tr><td class="mono ellip" title="${esc(x.asset_id)}">${x.asset_id}</td><td><span class="tag">${x.asset_type}</span></td>
     <td class="mono">v${x.version}</td>
-    <td><span class="tag ${x.status==='approved'?'ok':x.status==='rejected'?'danger':'warn'}">${x.status}</span></td>
-    <td style="color:var(--muted)">${x.note||''}</td>
+    <td><span class="tag ${x.status==='approved'?'ok':x.status==='rejected'?'danger':x.status==='pending_approval'?'warn':''}">${x.status}</span></td>
+    <td class="wrap" style="color:var(--muted)">${esc(x.note||'')}</td>
     <td><button class="btn ghost sm" onclick="asRollback(${x.id})">回滚</button></td></tr>`).join('')
     || '<tr><td colspan="6" style="color:var(--faint)">暂无版本</td></tr>';
 }
@@ -645,21 +646,21 @@ async function evoLoad(refresh){
     ` · 识别率 ${((r.telemetry||{}).identified_rate)}%`;
   $('evoIssues').innerHTML = (dg.issues||[]).map(i=>{
     const cls = i.severity==='high'?'danger':i.severity==='medium'?'warn':'';
-    return `<tr><td><span class="tag ${cls}">${i.severity}</span></td><td>${i.title}<div class="mono" style="color:var(--faint)">${i.code}</div></td>
-      <td class="mono" style="max-width:220px;color:var(--muted)">${JSON.stringify(i.evidence).slice(0,90)}</td>
-      <td style="color:var(--muted)">${i.recommendation}</td></tr>`;
+    return `<tr><td><span class="tag ${cls}">${i.severity}</span></td><td class="wrap">${i.title}<div class="mono cellsub">${i.code}</div></td>
+      <td class="wrap mono" style="max-width:220px;color:var(--muted)" title="${esc(JSON.stringify(i.evidence))}">${JSON.stringify(i.evidence).slice(0,120)}</td>
+      <td class="wrap" style="color:var(--muted)">${i.recommendation}</td></tr>`;
   }).join('') || '<tr><td colspan="4" style="color:var(--ok)">✓ 无问题</td></tr>';
   const pend = (r.proposals||[]).filter(p=>p.status==='pending');
   $('evoProps').innerHTML = pend.map(p=>`
-    <tr><td>${p.title}<div class="mono" style="color:var(--faint)">${p.rationale.slice(0,80)}</div></td>
+    <tr><td class="wrap"><b>${p.title}</b><div class="cellsub clamp2" title="${esc(p.rationale)}">${p.rationale}</div></td>
     <td><span class="tag">${p.kind}${p.apply_key?' · '+p.apply_key:''}</span></td>
-    <td style="color:var(--muted)">${(p.impact||'').slice(0,70)}</td>
+    <td class="wrap" style="color:var(--muted);max-width:280px">${(p.impact||'').slice(0,90)}</td>
     <td><span class="tag ${p.risk==='low'?'ok':p.risk==='high'?'danger':'warn'}">${p.risk}</span></td>
     <td><button class="btn primary sm" onclick="evoApply('${p.id}')">应用</button>
         <button class="btn ghost sm" onclick="evoReject('${p.id}')">驳回</button></td></tr>`).join('')
     + (r.proposals||[]).filter(p=>p.status==='applied').map(p=>`
-    <tr><td>${p.title}<div class="mono" style="color:var(--ok)">已应用 ${p.apply_key}=${p.apply_value}（旧值 ${p.old_value}）</div></td>
-    <td><span class="tag ok">applied</span></td><td style="color:var(--muted)">${(p.impact||'').slice(0,60)}</td>
+    <tr><td class="wrap"><b>${p.title}</b><div class="mono cellsub" style="color:var(--ok)">已应用 ${p.apply_key}=${p.apply_value}（旧值 ${p.old_value}）</div></td>
+    <td><span class="tag ok">applied</span></td><td class="wrap" style="color:var(--muted);max-width:280px">${(p.impact||'').slice(0,70)}</td>
     <td><span class="tag">${p.risk}</span></td>
     <td><button class="btn ghost sm" onclick="evoRollback('${p.id}')">回滚</button></td></tr>`).join('')
     || '<tr><td colspan="5" style="color:var(--faint)">暂无待批提案（点「生成提案」）</td></tr>';
@@ -847,13 +848,25 @@ document.querySelectorAll('#sidebar a.nv[data-sec]').forEach(a=>a.addEventListen
 syncNav();
 load();
 schedule();
-rpLoad();
-sgList();
-prModel();
+// 分区懒加载：首屏只拉总览，其余面板滚动进入视口时再拉（减少首屏并发请求）
+const lazyDone = {};
+function lazyLoad(secId, fn, key){
+  const sec = document.getElementById(secId);
+  if (!sec) { fn(); return; }
+  const k = key || secId;
+  const run = () => { if (lazyDone[k]) return; lazyDone[k] = 1; Promise.resolve(fn()).catch(()=>{}); };
+  const io = new IntersectionObserver((es) => {
+    if (es.some(e => e.isIntersecting)) { io.disconnect(); run(); }
+  }, { rootMargin: '300px' });
+  io.observe(sec);
+}
+lazyLoad('sec-report', rpLoad);
+lazyLoad('sec-segments', sgList);
+lazyLoad('sec-predict', prModel);
+lazyLoad('sec-evolve', evoLoad);
+lazyLoad('sec-eco', ecoLoad);
+lazyLoad('sec-assets', asLoad);
 applyLang();
-evoLoad();
-ecoLoad();
-asLoad();
 </script>
 </body>
 </html>
