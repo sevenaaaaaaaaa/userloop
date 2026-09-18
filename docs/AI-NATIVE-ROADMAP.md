@@ -112,3 +112,18 @@ AI 提案: 3 条（含 apply_key=frequency.global_gap_hours: 24，影响/风险/
 | P1 | WebsFlow 页内事件回流 | 落地页浏览/表单 → `/api/v1/hub/ingest` |
 | P1 | 跨系统身份映射 | OpenFlow member_id ↔ UserLoop user ↔ WebsFlow visitor |
 | P2 | 对话式触达 | 微信/WhatsApp AI 跟进（需外部凭据）|
+
+
+## 九、N2 运营资产市场（v0.5 起）
+
+- **行业资产包**（`userloop/assets/packs.py`，可经 `data/asset-packs/*.json` 扩展）：
+  电商增长包 / SaaS 增长包 / 教育转化包 / 本地服务包 —— 每个含 Loop 模板、A/B 实验、分群规则
+- **资产流转**（只含"定义"，绝不含用户/事件/会话数据）：
+  `GET /api/v1/assets/export`（导出本租户）→ `POST /api/v1/assets/import`（导入，支持 `dry_run` 预览、
+  幂等跳过、`prefix` 多套包共存）→ `POST /api/v1/assets/packs/{id}/apply`（一键应用内置包）
+- **版本化**：每次模板落库自动快照版本（`asset_versions`），可查看/回滚（回滚本身也留版本，审计链完整）
+- **审批门**：`assets.require_approval=true` 时导入资产以**停用态**落地，管理员逐条批准后才生效
+- **控制台**：「资产市场」面板（包列表/预览/应用/导出本租户）+「版本与审批」（版本列表 + 回滚）
+
+**验收（线上实测）**：空租户 → 预览 3 模板/1 实验/2 分群 → 一键应用 → `add_to_cart` 事件触发
+`ec_cart_abandon` Loop（`ai.email` 动作按 120 分钟延迟排队）→ 模板改名后回滚恢复。
