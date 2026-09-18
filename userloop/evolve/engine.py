@@ -20,6 +20,32 @@ from typing import Any
 from userloop.actions.executors import ExecutorContext
 from userloop.core.store import Store, iso_now, new_id
 
+def _get_path(cfg: dict, spec: tuple[str, ...]) -> tuple[bool, Any]:
+    """按键路径取值；返回 (是否存在, 值)。**区分"缺失"与"空值"**，决定回滚是删除还是恢复。"""
+    cur: Any = cfg
+    for node in spec:
+        if not isinstance(cur, dict) or node not in cur:
+            return False, None
+        cur = cur[node]
+    return True, cur
+
+
+def _set_path(cfg: dict, spec: tuple[str, ...], value: Any) -> None:
+    cur: Any = cfg
+    for node in spec[:-1]:
+        cur = cur.setdefault(node, {})
+    cur[spec[-1]] = value
+
+
+def _del_path(cfg: dict, spec: tuple[str, ...]) -> None:
+    cur: Any = cfg
+    for node in spec[:-1]:
+        if not isinstance(cur.get(node), dict):
+            return
+        cur = cur[node]
+    cur.pop(spec[-1], None)
+
+
 # 允许自进化自动应用的配置项（白名单：只改参数，不改逻辑）
 APPLY_WHITELIST: dict[str, tuple[str, tuple[str, ...]]] = {
     "frequency.weekly_cap": ("touch", "frequency", "weekly_cap"),
@@ -309,33 +335,24 @@ async def apply_proposal(store: Store, ctx: ExecutorContext, proposal_id: str) -
             file_cfg = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         file_cfg = {}
-    cursor: Any = file_cfg
-    for node in spec[:-1]:
-        cursor = cursor.setdefault(node, {})
-    # 旧值优先取文件，文件缺失时回退到生效配置（内存），保证回滚可用
-    old = cursor.get(spec[-1], None)
-    if old is None:
-        mem_old: Any = ctx.config
-        for node in spec:
-            mem_old = mem_old.get(node, {}) if isinstance(mem_old, dict) else None
-        old = mem_old
-    cursor[spec[-1]] = value
+    found, old = _get_path(file_cfg, spec)
+    if not found:
+        found, old = _get_path(ctx.config, spec)
+    _set_path(file_cfg, spec, value)
     os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump(file_cfg, f, ensure_ascii=False, indent=2)
     # 运行中的进程同步内存值（下次重启也生效）
-    mem: Any = ctx.config
-    for node in spec[:-1]:
-        mem = mem.setdefault(node, {})
-    mem[spec[-1]] = value
+    _set_path(ctx.config, spec, value)
 
-    prop.update({"applied_at": iso_now(), "old_value": old})
+    prop.update({"applied_at": iso_now(), "old_value": old, "old_present": bool(found)})
     await store.put_evolution_proposal(prop, status="applied")
     await store.add_lesson({"category": "evolution", "title": f"配置自进化：{key} → {value}",
                             "detail": prop.get("rationale", ""), "fix": prop.get("validation", ""),
                             "source": "evolution"})
     return {"ok": True, "kind": "config", "status": "applied", "key": key,
-            "old_value": old, "new_value": value, "rollback": {"key": key, "value": old}}
+            "old_value": old, "old_present": bool(found), "new_value": value,
+            "rollback": {"key": key, "value": old, "restore": "set" if found else "remove"}}
 
 
 async def rollback_proposal(store: Store, ctx: ExecutorContext, proposal_id: str) -> dict[str, Any]:
@@ -347,8 +364,8 @@ async def rollback_proposal(store: Store, ctx: ExecutorContext, proposal_id: str
     if prop.get("status") != "applied":
         return {"ok": False, "error": f"仅可回滚已应用的提案（当前 {prop.get('status')}）"}
     spec = APPLY_WHITELIST.get(str(prop.get("apply_key") or ""))
-    if not spec or prop.get("old_value") is None:
-        return {"ok": False, "error": "该提案无旧值记录，无法自动回滚"}
+    if not spec:
+        return {"ok": False, "error": "该提案不可自动回滚"}
     import os
 
     cfg_path = os.path.join(ctx.config.get("data_dir") or "data", "config.json")
@@ -357,16 +374,15 @@ async def rollback_proposal(store: Store, ctx: ExecutorContext, proposal_id: str
             file_cfg = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         file_cfg = {}
-    node: Any = file_cfg
-    for n in spec[:-1]:
-        node = node.setdefault(n, {})
-    node[spec[-1]] = prop["old_value"]
+    # 原本不存在该配置 → 回滚即删除（回到模块默认），绝不写入空值
+    if prop.get("old_present"):
+        _set_path(file_cfg, spec, prop.get("old_value"))
+        _set_path(ctx.config, spec, prop.get("old_value"))
+    else:
+        _del_path(file_cfg, spec)
+        _del_path(ctx.config, spec)
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump(file_cfg, f, ensure_ascii=False, indent=2)
-    mem: Any = ctx.config
-    for n in spec[:-1]:
-        mem = mem.setdefault(n, {})
-    mem[spec[-1]] = prop["old_value"]
     prop["status"] = "rolled_back"
     await store.put_evolution_proposal(prop, status="rolled_back")
     await store.add_lesson({"category": "evolution",
@@ -374,7 +390,9 @@ async def rollback_proposal(store: Store, ctx: ExecutorContext, proposal_id: str
                             "detail": f"该变更已被评估为不适用（原值 {prop.get('old_value')}，"
                                       f"试改值 {prop.get('apply_value')}）",
                             "fix": "回滚后观察指标恢复情况", "source": "evolution"})
-    return {"ok": True, "rollback": {"key": prop["apply_key"], "restored": prop["old_value"]}}
+    return {"ok": True, "rollback": {"key": prop["apply_key"],
+                                     "restored": prop.get("old_value") if prop.get("old_present") else "默认值",
+                                     "action": "set" if prop.get("old_present") else "remove"}}
 
 
 # ── Lessons 渲染 ──

@@ -153,3 +153,37 @@ async def test_rollback_restores_old_value_and_logs_lesson(store: Store, tmp_pat
     await store.put_evolution_proposal({"id": "evo_p2", "title": "x", "kind": "config",
                                         "apply_key": "frequency.weekly_cap", "apply_value": 9})
     assert (await evo.rollback_proposal(store, ctx, "evo_p2"))["ok"] is False
+
+
+async def test_apply_rollback_when_key_absent_restores_default(store: Store, tmp_path) -> None:
+    """回归：配置本不存在时 → 应用记录 old_present=False；回滚应**删除**该键（回到默认），
+    绝不写入空值（此前把 {} 写进 global_gap_hours 会破坏频控）。"""
+    ctx = _ctx(tmp_path)                      # config 里没有 touch.frequency
+    ctx.store = store
+    prop = {"id": "evo_absent", "title": "放宽间隔", "kind": "config",
+            "apply_key": "frequency.global_gap_hours", "apply_value": 12, "risk": "low"}
+    await store.put_evolution_proposal(prop)
+    out = await evo.apply_proposal(store, ctx, "evo_absent")
+    assert out["old_present"] is False and out["rollback"]["restore"] == "remove"
+    before = (await store.list_evolution_proposals())[0]
+    assert before["old_value"] is None
+
+    rb = await evo.rollback_proposal(store, ctx, "evo_absent")
+    assert rb["ok"] and rb["rollback"]["action"] == "remove"
+    # 内存与文件都不再含该键（而不是 {}）
+    assert "global_gap_hours" not in (ctx.config.get("touch", {}).get("frequency", {}))
+    with open(str(tmp_path / "config.json"), encoding="utf-8") as f:
+        data = json.load(f)
+    assert "global_gap_hours" not in (data.get("touch", {}).get("frequency", {}))
+
+
+def test_frequency_cfg_ignores_invalid_types() -> None:
+    """防御：配置被写成非法类型时不破坏频控（回落默认）。"""
+    from userloop.actions.executors import ExecutorContext
+    from userloop.touch import frequency
+
+    ctx = ExecutorContext("/tmp", {"touch": {"frequency": {"global_gap_hours": {}, "weekly_cap": "x",
+                                                         "quiet_hours": "bad", "tz_offset_hours": 8}}})
+    cfg = frequency.cfg_of(ctx)
+    assert cfg["global_gap_hours"] == 24 and cfg["weekly_cap"] == 3
+    assert cfg["quiet_hours"] == [22, 8] and cfg["tz_offset_hours"] == 8
