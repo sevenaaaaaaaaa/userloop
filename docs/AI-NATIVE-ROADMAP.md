@@ -81,3 +81,34 @@ H5 双引擎 + 六维千面、IM、HubSpot、OpenFlow/MFlow 互通）/ A/B 版�
 1. **先解决"人怎么用"**：MA 工具失败的主因不是缺功能，而是运营不会配、配错、配了不放心 → Copilot + 质检门
 2. **再解决"用户体验"**：跨渠道骚扰是 MA 最大的隐性成本（退订/投诉/品牌损伤）→ 全局频控 + 渠道选择
 3. **最后做预测/对话**：需要数据积累（我们已有事件量与回流数据），且需外部凭据（微信/WhatsApp）
+
+
+## 八、生态互联与自我进化（v0.4.0 起）
+
+完整规划见 `docs/ECOSYSTEM-AND-EVOLUTION.md`；Lessons 见 `docs/LESSONS.md`。
+
+**已实现的自进化四件套 + 特色**
+1. 版本化交付：`VERSION` / `CHANGELOG.md` / `deploy/release.sh`
+2. 运行数据回流：`data/telemetry/*.jsonl`（吞吐/失败/被拦/AI/模型/租户）
+3. Lessons：`evolution_lessons` 表 → `docs/LESSONS.md`（错误只犯一次）
+4. Demo 驱动验收：每个能力均有 CLI/控制台一键 demo
+5. **自诊断 + AI 提案 + 审批应用 + 一键回滚**（用自身 AI 能力改造自身，全程审计）
+
+**线上实测（main 租户）**
+```
+自诊断: 高 0 · 中 2 · 低 2
+  - 识别率偏低 3.4%（639 用户中 617 匿名）
+  - 触达拦截率 73.3%（touches 8 / blocks 22，全部来自 email）
+  - churn / propensity 模型未训练（样本不足，自动回退规则版）
+AI 提案: 3 条（含 apply_key=frequency.global_gap_hours: 24，影响/风险/验证齐全）
+应用 → 生效并记录旧值；回滚 → 删除该键回到默认；两次操作均写入 Lessons
+```
+
+**下一步（N1 生态互联）**
+| 优先级 | 事项 | 说明 |
+|---|---|---|
+| P0 | inFlow 洞察 → UserLoop Loop | 情报系统的竞品/流量洞察自动变成运营动作（最短闭环）|
+| P0 | MFlow 发布结果回流 → 验证窗口 | 内容是否带来转化（内容归因）|
+| P1 | WebsFlow 页内事件回流 | 落地页浏览/表单 → `/api/v1/hub/ingest` |
+| P1 | 跨系统身份映射 | OpenFlow member_id ↔ UserLoop user ↔ WebsFlow visitor |
+| P2 | 对话式触达 | 微信/WhatsApp AI 跟进（需外部凭据）|
