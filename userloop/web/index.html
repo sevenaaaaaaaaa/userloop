@@ -339,6 +339,9 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// 内联 onclick 参数：先 JSON 序列化再属性转义，避免引号/反斜杠越界注入
+const jsArg = v => esc(JSON.stringify(String(v ?? '')));
+const enc = v => encodeURIComponent(String(v ?? ''));
 const fmt = s => (s || '').replace('T', ' ').slice(0, 19);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
 const UL_I18N = {
@@ -383,7 +386,7 @@ async function j(url){ const r = await fetch(url); if(r.status===401){location.r
 const STAGE_LABEL={visitor:'访客',signup:'已注册',activated:'已激活',paying:'已付费',retained:'复购',advocate:'推荐者',churn_risk:'流失风险',churned:'已流失'};
 function bar(label,value,max,extra){
   const pct = max>0 ? Math.round(value/max*100) : 0;
-  return `<div class="fn-row"><div class="fn-l">${label}</div><div class="fn-t"><div class="fn-f" style="width:${pct}%"></div></div><div class="fn-n">${value}</div></div>${extra?`<div class="fn-row"><div class="fn-l"></div><div class="fn-t" style="height:auto;background:none"><span class="fn-rate">${extra}</span></div><div></div></div>`:''}`;
+  return `<div class="fn-row"><div class="fn-l">${esc(label)}</div><div class="fn-t"><div class="fn-f" style="width:${pct}%"></div></div><div class="fn-n">${esc(value)}</div></div>${extra?`<div class="fn-row"><div class="fn-l"></div><div class="fn-t" style="height:auto;background:none"><span class="fn-rate">${esc(extra)}</span></div><div></div></div>`:''}`;
 }
 
 let lastStamp = null, pollMs = 60000, fails = 0;
@@ -453,37 +456,37 @@ function render(r){
   const rows = Object.entries(tstats).map(([tid,v])=>{
     const e=v.effective||0, n=v.neutral||0, tot=e+n;
     const rate = tot? Math.round(e/tot*100)+'%' : '—';
-    return `<tr><td class="mono">${tid}</td><td style="color:var(--muted)">${names[tid]||'—'}</td>
+    return `<tr><td class="mono">${esc(tid)}</td><td style="color:var(--muted)">${esc(names[tid]||'—')}</td>
       <td class="v-effective">${e}</td><td class="v-neutral">${n}</td><td class="mono">${rate}</td></tr>`;
   }).join('');
   $('tstats').innerHTML = rows || '<tr><td colspan="5" style="color:var(--faint)">暂无回流数据（Loop 验证窗口到期后产生）</td></tr>';
 
   $('transitions').innerHTML = (d.recent_transitions||[]).map(t=>`
-    <tr><td class="mono">${(t.user_id||'').slice(0,12)}</td>
-    <td class="nw">${STAGE_LABEL[t.from_stage]||t.from_stage} → <b>${STAGE_LABEL[t.to_stage]||t.to_stage}</b></td>
-    <td style="color:var(--muted)">${t.reason||''}</td><td class="mono" style="color:var(--faint)">${fmt(t.created_at)}</td></tr>`).join('')
+    <tr><td class="mono">${esc((t.user_id||'').slice(0,12))}</td>
+    <td class="nw">${esc(STAGE_LABEL[t.from_stage]||t.from_stage)} → <b>${esc(STAGE_LABEL[t.to_stage]||t.to_stage)}</b></td>
+    <td style="color:var(--muted)">${esc(t.reason||'')}</td><td class="mono" style="color:var(--faint)">${esc(fmt(t.created_at))}</td></tr>`).join('')
     || '<tr><td colspan="4" style="color:var(--faint)">暂无迁移</td></tr>';
 
   $('loops').innerHTML = (d.loops||[]).map(l=>{
     const trig = l.trigger && l.trigger.event ? l.trigger.event : (l.trigger && l.trigger.stage ? '→'+l.trigger.stage : (l.trigger && l.trigger.days ? l.trigger.days+'d 无事件' : (l.trigger&&l.trigger.type)||'—'));
-    const acts = (l.actions||[]).map(a=>`<span class="tag mono s-${a.status}">${a.type}</span>`).join(' ');
-    return `<tr><td class="mono">${(l.id||'').slice(0,14)}</td><td>${l.template?l.template.name:l.template_id}</td>
-      <td class="tag mono">${trig}</td><td class="s-${l.status}">${l.status}</td><td>${acts}</td>
-      <td class="mono" style="color:var(--faint)">${fmt(l.created_at)}</td></tr>`;
+    const acts = (l.actions||[]).map(a=>`<span class="tag mono s-${esc(a.status)}">${esc(a.type)}</span>`).join(' ');
+    return `<tr><td class="mono">${esc((l.id||'').slice(0,14))}</td><td>${esc(l.template?l.template.name:l.template_id)}</td>
+      <td class="tag mono">${esc(trig)}</td><td class="s-${esc(l.status)}">${esc(l.status)}</td><td>${acts}</td>
+      <td class="mono" style="color:var(--faint)">${esc(fmt(l.created_at))}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--faint)">暂无 Loop</td></tr>';
 
   $('users').innerHTML = (d.users||[]).map(u=>{
     const st=u.stats||{};
-    return `<tr><td class="mono wrap">${u.distinct_id}</td><td class="wrap">${u.email||'—'}</td>
-      <td><span class="tag ${u.stage==='paying'||u.stage==='retained'||u.stage==='advocate'?'ok':u.stage==='visitor'?'':'accent'}">${STAGE_LABEL[u.stage]||u.stage}</span></td>
+    return `<tr><td class="mono wrap">${esc(u.distinct_id)}</td><td class="wrap">${esc(u.email||'—')}</td>
+      <td><span class="tag ${u.stage==='paying'||u.stage==='retained'||u.stage==='advocate'?'ok':u.stage==='visitor'?'':'accent'}">${esc(STAGE_LABEL[u.stage]||u.stage)}</span></td>
       <td class="mono">${st.purchases||0}</td><td class="mono">${st.event_count||0}</td>
-      <td class="mono" style="color:var(--faint)">${fmt(u.last_seen)}</td></tr>`;
+      <td class="mono" style="color:var(--faint)">${esc(fmt(u.last_seen))}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--faint)">暂无用户</td></tr>';
 
   $('events').innerHTML = (d.events||[]).map(e=>`
-    <div class="row"><div class="ic">${(e.source||'·').slice(0,2)}</div>
-      <div class="b"><div class="t">${e.event}</div><div class="d">${e.distinct_id}</div></div>
-      <div class="tm">${fmt(e.created_at)}</div></div>`).join('')
+    <div class="row"><div class="ic">${esc((e.source||'·').slice(0,2))}</div>
+      <div class="b"><div class="t">${esc(e.event)}</div><div class="d">${esc(e.distinct_id)}</div></div>
+      <div class="tm">${esc(fmt(e.created_at))}</div></div>`).join('')
     || '<div style="color:var(--faint);font-size:var(--fs-md)">暂无事件</div>';
 
   // 预测洞察（列表在分区进入视口时懒加载，见 prList/setupLazy）
@@ -494,7 +497,7 @@ function render(r){
     const clicks = (v.email_click||0) + (v.h5_click||0) + (v.sms_click||0) + (v.im_click||0);
     const delivered = v.delivered || (opens + clicks);
     const rate = delivered ? Math.round(clicks/delivered*100)+'%' : '—';
-    return `<tr><td><span class="tag">${name}</span></td><td class="mono">${delivered}</td>
+    return `<tr><td><span class="tag">${esc(name)}</span></td><td class="mono">${delivered}</td>
       <td class="mono">${opens}</td><td class="mono">${clicks}</td><td class="mono">${rate}</td></tr>`;
   }).join('');
   $('channels').innerHTML = chRows || '<tr><td colspan="5" style="color:var(--faint)">暂无渠道数据</td></tr>';
@@ -504,19 +507,19 @@ function render(r){
   $('ab-sub').textContent = `共 ${abExps.length} 个实验 · 结论用双比例 z 检验（置信≥阈值才判 winner）`;
   $('ab').innerHTML = abExps.map(e=>{
     const rows = Object.values(e.metrics||{}).sort((x,y)=>(y[e.metric]||0)-(x[e.metric]||0));
-    const head = `<tr><td rowspan="${rows.length||1}"><b>${e.name||e.id}</b><br><span class="mono" style="color:var(--faint)">${e.id}</span></td>
-      <td rowspan="${rows.length||1}"><span class="tag">${e.channel}</span></td>
-      <td rowspan="${rows.length||1}" class="mono">${e.metric}</td>`;
+    const head = `<tr><td rowspan="${rows.length||1}"><b>${esc(e.name||e.id)}</b><br><span class="mono" style="color:var(--faint)">${esc(e.id)}</span></td>
+      <td rowspan="${rows.length||1}"><span class="tag">${esc(e.channel)}</span></td>
+      <td rowspan="${rows.length||1}" class="mono">${esc(e.metric)}</td>`;
     const body = (rows.length?rows:[{variant:'—'}]); 
     const cells = body.map((r,i)=>{
       const pre = i===0 ? head : '<tr>';
       const v = e.verdict||{};
       const isLeader = v.leader === r.variant;
-      const verdict = i===0 ? `<td rowspan="${body.length}"><span class="tag ${v.verdict==='winner'?'ok':v.verdict==='running'?'accent':'warn'}">${v.verdict||'—'}</span>
-        ${v.confidence?`<div class="mono" style="color:var(--faint)">置信 ${v.confidence}</div>`:''}
-        ${e.promoted_variant?`<div class="mono" style="color:var(--ok)">已提升 ${e.promoted_variant}</div>`:''}</td>
-        <td rowspan="${body.length}">${v.verdict==='winner'?`<button class="btn primary sm" onclick="abPromote('${e.id}')">提升 ${v.leader}</button>`:'—'}</td>` : '';
-      return `${pre}<td class="mono" ${isLeader?'style="color:var(--ok);font-weight:600"':''}>${r.variant}${r.name?' '+r.name:''}</td>
+      const verdict = i===0 ? `<td rowspan="${body.length}"><span class="tag ${v.verdict==='winner'?'ok':v.verdict==='running'?'accent':'warn'}">${esc(v.verdict||'—')}</span>
+        ${v.confidence?`<div class="mono" style="color:var(--faint)">置信 ${esc(v.confidence)}</div>`:''}
+        ${e.promoted_variant?`<div class="mono" style="color:var(--ok)">已提升 ${esc(e.promoted_variant)}</div>`:''}</td>
+        <td rowspan="${body.length}">${v.verdict==='winner'?`<button class="btn primary sm" onclick="abPromote(${jsArg(e.id)})">提升 ${esc(v.leader)}</button>`:'—'}</td>` : '';
+      return `${pre}<td class="mono" ${isLeader?'style="color:var(--ok);font-weight:600"':''}>${esc(r.variant)}${r.name?' '+esc(r.name):''}</td>
         <td class="mono">${r.delivered??0}</td><td class="mono">${r.open_rate??0}</td>
         <td class="mono">${r.click_rate??0}</td><td class="mono">${r.conversion_rate??0}</td>${verdict}</tr>`;
     }).join('');
@@ -529,15 +532,15 @@ function render(r){
   $('ai-sub').textContent = `全生命周期决策 · 自动 ${ac.auto_executed||0} · 待批 ${ac.pending_approval||0} · 静默 ${ac.noop||0}`;
   $('ai').innerHTML = (d.ai_decisions||[]).map(x=>{
     const ops = x.status==='pending_approval'
-      ? `<button class="btn primary sm" onclick="aiApprove('${x.id}')">批准执行</button> <button class="btn ghost sm" onclick="aiReject('${x.id}')">驳回</button>`
-      : (x.loop_id ? `<span class="tag mono">${x.loop_id.slice(0,12)}</span>` : '—');
+      ? `<button class="btn primary sm" onclick="aiApprove(${jsArg(x.id)})">批准执行</button> <button class="btn ghost sm" onclick="aiReject(${jsArg(x.id)})">驳回</button>`
+      : (x.loop_id ? `<span class="tag mono">${esc(x.loop_id.slice(0,12))}</span>` : '—');
     const st = x.status==='pending_approval' ? 'warn' : (x.status==='auto_executed'||x.status==='approved') ? 'ok' : x.status==='rejected'||x.status==='failed' ? 'danger' : '';
-    return `<tr><td class="mono" style="color:var(--faint)">${fmt(x.created_at)}</td>
-      <td class="mono">${(x.user_id||'').slice(0,10)}</td>
-      <td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-      <td class="mono nw">${x.intent}</td>
-      <td><span class="tag ${st}">${x.risk} / ${x.status}</span></td>
-      <td class="wrap" style="color:var(--muted);max-width:360px"><div class="clamp3" title="${esc(x.reasoning||'')}">${x.reasoning||''}</div></td>
+    return `<tr><td class="mono" style="color:var(--faint)">${esc(fmt(x.created_at))}</td>
+      <td class="mono">${esc((x.user_id||'').slice(0,10))}</td>
+      <td class="nw">${esc(STAGE_LABEL[x.stage]||x.stage||'—')}</td>
+      <td class="mono nw">${esc(x.intent)}</td>
+      <td><span class="tag ${st}">${esc(x.risk)} / ${esc(x.status)}</span></td>
+      <td class="wrap" style="color:var(--muted);max-width:360px"><div class="clamp3" title="${esc(x.reasoning||'')}">${esc(x.reasoning||'')}</div></td>
       <td class="mono">${(x.confidence||0).toFixed(2)}</td><td>${ops}</td></tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--faint)">暂无 AI 决策（点「立即决策一批」试跑）</td></tr>';
   // 首屏渲染完成（页面有了高度）后再注册分区懒加载
@@ -547,19 +550,19 @@ function render(r){
 async function asLoad(){
   const [r, v] = await Promise.all([j('api/v1/assets/packs'), j('api/v1/assets/versions?limit=15')]);
   $('asPacks').innerHTML = (r.packs||[]).map(p=>`
-    <tr><td class="wrap"><b>${p.name}</b><div class="cellsub">${esc(p.description||'')}</div></td>
-    <td><span class="tag">${p.industry}</span></td>
+    <tr><td class="wrap"><b>${esc(p.name)}</b><div class="cellsub">${esc(p.description||'')}</div></td>
+    <td><span class="tag">${esc(p.industry)}</span></td>
     <td class="mono">模板 ${p.counts.loop_templates} · 画布 ${p.counts.canvas_flows} · 实验 ${p.counts.experiments} · 分群 ${p.counts.segments}</td>
-    <td class="mono">${(p.requires||[]).join(',')||'—'}</td>
-    <td><button class="btn ghost sm" onclick="asPreview('${p.id}')">预览</button>
-        <button class="btn primary sm" onclick="asApply('${p.id}')">应用</button></td></tr>`).join('')
+    <td class="mono">${esc((p.requires||[]).join(',')||'—')}</td>
+    <td><button class="btn ghost sm" onclick="asPreview(${jsArg(p.id)})">预览</button>
+        <button class="btn primary sm" onclick="asApply(${jsArg(p.id)})">应用</button></td></tr>`).join('')
     || '<tr><td colspan="5" style="color:var(--faint)">无资产包</td></tr>';
   $('asVersions').innerHTML = (v.versions||[]).map(x=>`
-    <tr><td class="mono ellip" title="${esc(x.asset_id)}">${x.asset_id}</td><td><span class="tag">${x.asset_type}</span></td>
+    <tr><td class="mono ellip" title="${esc(x.asset_id)}">${esc(x.asset_id)}</td><td><span class="tag">${esc(x.asset_type)}</span></td>
     <td class="mono">v${x.version}</td>
-    <td><span class="tag ${x.status==='approved'?'ok':x.status==='rejected'?'danger':x.status==='pending_approval'?'warn':''}">${x.status}</span></td>
+    <td><span class="tag ${x.status==='approved'?'ok':x.status==='rejected'?'danger':x.status==='pending_approval'?'warn':''}">${esc(x.status)}</span></td>
     <td class="wrap" style="color:var(--muted)">${esc(x.note||'')}</td>
-    <td><button class="btn ghost sm" onclick="asRollback(${x.id})">回滚</button></td></tr>`).join('')
+    <td><button class="btn ghost sm" onclick="asRollback(${Number(x.id)||0})">回滚</button></td></tr>`).join('')
     || '<tr><td colspan="6" style="color:var(--faint)">暂无版本</td></tr>';
 }
 async function asPreview(id){
@@ -589,16 +592,16 @@ async function ecoLoad(){
     const [ins, pubs] = await Promise.all([j('api/v1/integrations/inflow/insights?limit=10'),
                                            j('api/v1/content/publications?limit=10')]);
     $('ecoInsights').innerHTML = (ins.insights||[]).map(x=>`
-      <tr><td>${(x.title||'').slice(0,42)}<div class="mono" style="color:var(--faint)">${x.type} · conf ${x.confidence??'—'}</div></td>
-      <td><span class="tag ${x.severity==='high'||x.severity==='critical'?'danger':x.severity==='medium'?'warn':''}">${x.severity||'—'}</span></td>
-      <td class="mono">${x.loop_id?x.loop_id.slice(0,14):'—'} ${x.enabled?'<span class="tag ok">已启用</span>':'<span class="tag">草稿</span>'}</td>
-      <td>${x.enabled?'—':`<button class="btn primary sm" onclick="ecoEnable('${x.id}')">启用 Loop</button>`}</td></tr>`).join('')
+      <tr><td>${esc((x.title||'').slice(0,42))}<div class="mono" style="color:var(--faint)">${esc(x.type)} · conf ${esc(x.confidence??'—')}</div></td>
+      <td><span class="tag ${x.severity==='high'||x.severity==='critical'?'danger':x.severity==='medium'?'warn':''}">${esc(x.severity||'—')}</span></td>
+      <td class="mono">${esc(x.loop_id?x.loop_id.slice(0,14):'—')} ${x.enabled?'<span class="tag ok">已启用</span>':'<span class="tag">草稿</span>'}</td>
+      <td>${x.enabled?'—':`<button class="btn primary sm" onclick="ecoEnable(${jsArg(x.id)})">启用 Loop</button>`}</td></tr>`).join('')
       || '<tr><td colspan="4" style="color:var(--faint)">暂无洞察（点「立即同步」）</td></tr>';
     $('ecoPubs').innerHTML = (pubs.publications||[]).map(p=>`
-      <tr><td>${(p.title||p.item_id).slice(0,38)}<div class="mono" style="color:var(--faint)">${p.item_id}</div></td>
-      <td class="mono" style="color:var(--faint)">${(p.published_at||'').slice(0,16)}</td>
-      <td class="mono" style="color:var(--faint)">→${(p.verify_before||'').slice(0,10)}</td>
-      <td>${p.status==='verified'?`<span class="tag ${p.verdict==='effective'?'ok':''}">${p.verdict||'—'}</span>`:'<span class="tag warn">验证中</span>'}</td></tr>`).join('')
+      <tr><td>${esc((p.title||p.item_id||'').slice(0,38))}<div class="mono" style="color:var(--faint)">${esc(p.item_id)}</div></td>
+      <td class="mono" style="color:var(--faint)">${esc((p.published_at||'').slice(0,16))}</td>
+      <td class="mono" style="color:var(--faint)">→${esc((p.verify_before||'').slice(0,10))}</td>
+      <td>${p.status==='verified'?`<span class="tag ${p.verdict==='effective'?'ok':''}">${esc(p.verdict||'—')}</span>`:'<span class="tag warn">验证中</span>'}</td></tr>`).join('')
       || '<tr><td colspan="4" style="color:var(--faint)">暂无发布记录（等 MFlow 回流）</td></tr>';
   } catch(e) {}
 }
@@ -630,25 +633,26 @@ async function evoLoad(refresh){
     ` · 识别率 ${((r.telemetry||{}).identified_rate)}%`;
   $('evoIssues').innerHTML = (dg.issues||[]).map(i=>{
     const cls = i.severity==='high'?'danger':i.severity==='medium'?'warn':'';
-    return `<tr><td><span class="tag ${cls}">${i.severity}</span></td><td class="wrap">${i.title}<div class="mono cellsub">${i.code}</div></td>
-      <td class="wrap mono" style="max-width:220px;color:var(--muted)" title="${esc(JSON.stringify(i.evidence))}">${JSON.stringify(i.evidence).slice(0,120)}</td>
-      <td class="wrap" style="color:var(--muted)">${i.recommendation}</td></tr>`;
+    const ev = JSON.stringify(i.evidence);
+    return `<tr><td><span class="tag ${cls}">${esc(i.severity)}</span></td><td class="wrap">${esc(i.title)}<div class="mono cellsub">${esc(i.code)}</div></td>
+      <td class="wrap mono" style="max-width:220px;color:var(--muted)" title="${esc(ev)}">${esc(ev.slice(0,120))}</td>
+      <td class="wrap" style="color:var(--muted)">${esc(i.recommendation)}</td></tr>`;
   }).join('') || '<tr><td colspan="4" style="color:var(--ok)">✓ 无问题</td></tr>';
   const pend = (r.proposals||[]).filter(p=>p.status==='pending');
   $('evoProps').innerHTML = pend.map(p=>`
-    <tr><td class="wrap"><b>${p.title}</b><div class="cellsub clamp2" title="${esc(p.rationale)}">${p.rationale}</div></td>
-    <td><span class="tag">${p.kind}${p.apply_key?' · '+p.apply_key:''}</span></td>
-    <td class="wrap" style="color:var(--muted);max-width:280px">${(p.impact||'').slice(0,90)}</td>
-    <td><span class="tag ${p.risk==='low'?'ok':p.risk==='high'?'danger':'warn'}">${p.risk}</span></td>
-    <td><button class="btn primary sm" onclick="evoApply('${p.id}')">应用</button>
-        <button class="btn ghost sm" onclick="evoReject('${p.id}')">驳回</button></td></tr>`).join('')
+    <tr><td class="wrap"><b>${esc(p.title)}</b><div class="cellsub clamp2" title="${esc(p.rationale)}">${esc(p.rationale)}</div></td>
+    <td><span class="tag">${esc(p.kind)}${p.apply_key?' · '+esc(p.apply_key):''}</span></td>
+    <td class="wrap" style="color:var(--muted);max-width:280px">${esc((p.impact||'').slice(0,90))}</td>
+    <td><span class="tag ${p.risk==='low'?'ok':p.risk==='high'?'danger':'warn'}">${esc(p.risk)}</span></td>
+    <td><button class="btn primary sm" onclick="evoApply(${jsArg(p.id)})">应用</button>
+        <button class="btn ghost sm" onclick="evoReject(${jsArg(p.id)})">驳回</button></td></tr>`).join('')
     + (r.proposals||[]).filter(p=>p.status==='applied').map(p=>`
-    <tr><td class="wrap"><b>${p.title}</b><div class="mono cellsub" style="color:var(--ok)">已应用 ${p.apply_key}=${p.apply_value}（旧值 ${p.old_value}）</div></td>
-    <td><span class="tag ok">applied</span></td><td class="wrap" style="color:var(--muted);max-width:280px">${(p.impact||'').slice(0,70)}</td>
-    <td><span class="tag">${p.risk}</span></td>
-    <td><button class="btn ghost sm" onclick="evoRollback('${p.id}')">回滚</button></td></tr>`).join('')
+    <tr><td class="wrap"><b>${esc(p.title)}</b><div class="mono cellsub" style="color:var(--ok)">已应用 ${esc(p.apply_key)}=${esc(p.apply_value)}（旧值 ${esc(p.old_value)}）</div></td>
+    <td><span class="tag ok">applied</span></td><td class="wrap" style="color:var(--muted);max-width:280px">${esc((p.impact||'').slice(0,70))}</td>
+    <td><span class="tag">${esc(p.risk)}</span></td>
+    <td><button class="btn ghost sm" onclick="evoRollback(${jsArg(p.id)})">回滚</button></td></tr>`).join('')
     || '<tr><td colspan="5" style="color:var(--faint)">暂无待批提案（点「生成提案」）</td></tr>';
-  $('evoLessons').innerHTML = (r.lessons||[]).slice(0,8).map(l=>`<div style="margin:4px 0">• <b>${l.title}</b> <span class="mono" style="color:var(--faint)">${l.source}</span></div>`).join('')
+  $('evoLessons').innerHTML = (r.lessons||[]).slice(0,8).map(l=>`<div style="margin:4px 0">• <b>${esc(l.title)}</b> <span class="mono" style="color:var(--faint)">${esc(l.source)}</span></div>`).join('')
     || '<div style="color:var(--faint)">暂无 Lessons</div>';
 }
 async function evoPropose(){
@@ -690,7 +694,7 @@ async function sgDraft(){
   const pv = r.preview || {};
   $('sgMeta').textContent = `${r.segment.name} · 命中 ${pv.count||0} / 扫描 ${pv.scanned||0}`;
   if ((r.warnings||[]).length) $('sgWarn').textContent = '⚠ ' + r.warnings.join('；');
-  $('sgPreview').innerHTML = (pv.sample||[]).map(x=>`<span class="tag mono">${x.distinct_id}${x.stage?' · '+x.stage:''}</span>`).join(' ') || '<span style="color:var(--faint)">无命中</span>';
+  $('sgPreview').innerHTML = (pv.sample||[]).map(x=>`<span class="tag mono">${esc(x.distinct_id)}${x.stage?' · '+esc(x.stage):''}</span>`).join(' ') || '<span style="color:var(--faint)">无命中</span>';
 }
 async function sgSave(){
   let seg; try { seg = JSON.parse($('sgRules').value); } catch(e){ toast('规则 JSON 不合法'); return; }
@@ -701,11 +705,11 @@ async function sgSave(){
 async function sgList(){
   const r = await (await fetch('api/v1/segments')).json();
   $('sgList').innerHTML = (r.segments||[]).map(x=>`
-    <tr><td>${x.name}<div class="mono" style="color:var(--faint)">${x.id}</div></td>
-    <td class="mono" style="max-width:320px;color:var(--muted)">${(x.rules||[]).map(r=>`${r.field} ${r.op} ${JSON.stringify(r.value)}`).join(' · ')}</td>
-    <td class="mono">${x.count}</td>
-    <td><a class="btn ghost sm" href="api/v1/segments/${x.id}/export.csv">导出 CSV</a>
-        <button class="btn ghost sm" onclick="sgDecide('${x.id}')">让 AI 决策</button></td></tr>`).join('')
+    <tr><td>${esc(x.name)}<div class="mono" style="color:var(--faint)">${esc(x.id)}</div></td>
+    <td class="mono wrap" style="max-width:320px;color:var(--muted)">${esc((x.rules||[]).map(r=>`${r.field} ${r.op} ${JSON.stringify(r.value)}`).join(' · '))}</td>
+    <td class="mono">${esc(x.count)}</td>
+    <td><a class="btn ghost sm" href="api/v1/segments/${enc(x.id)}/export.csv">导出 CSV</a>
+        <button class="btn ghost sm" onclick="sgDecide(${jsArg(x.id)})">让 AI 决策</button></td></tr>`).join('')
     || '<tr><td colspan="4" style="color:var(--faint)">暂无分群</td></tr>';
 }
 async function sgDecide(id){
@@ -732,15 +736,15 @@ async function prList(){
                                         j('api/v1/predictions?sort=ltv&limit=8')]);
     $('churnSub').textContent = `共 ${ch.count} 条（churn 分数 + 归因）`;
     $('churnTop').innerHTML = (ch.items||[]).map(x=>`
-      <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-      <td class="mono nw" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${x.churn}</td>
-      <td class="wrap" style="color:var(--muted);max-width:280px"><div class="clamp2" title="${esc(((x.reasons||{}).churn||[])[0]||'')}">${((x.reasons||{}).churn||[])[0]||'—'}</div></td>
-      <td><button class="btn ghost sm" onclick="prDecide('${x.distinct_id}')">让 AI 决策</button></td></tr>`).join('')
+      <tr><td class="mono wrap">${esc(x.distinct_id)}</td><td class="nw">${esc(STAGE_LABEL[x.stage]||x.stage||'—')}</td>
+      <td class="mono nw" style="color:${x.churn>=0.6?'var(--danger)':x.churn>=0.3?'var(--warn)':'var(--muted)'}">${esc(x.churn)}</td>
+      <td class="wrap" style="color:var(--muted);max-width:280px"><div class="clamp2" title="${esc(((x.reasons||{}).churn||[])[0]||'')}">${esc(((x.reasons||{}).churn||[])[0]||'—')}</div></td>
+      <td><button class="btn ghost sm" onclick="prDecide(${jsArg(x.distinct_id)})">让 AI 决策</button></td></tr>`).join('')
       || '<tr><td colspan="5" style="color:var(--faint)">暂无数据（点「立即重算一批」）</td></tr>';
     $('ltvTop').innerHTML = (lt.items||[]).map(x=>`
-      <tr><td class="mono wrap">${x.distinct_id}</td><td class="nw">${STAGE_LABEL[x.stage]||x.stage||'—'}</td>
-      <td class="mono nw">${x.ltv}</td><td><span class="tag ${x.tier==='vip'||x.tier==='high'?'ok':''}">${x.tier||'—'}</span></td>
-      <td class="mono">${x.propensity}</td></tr>`).join('')
+      <tr><td class="mono wrap">${esc(x.distinct_id)}</td><td class="nw">${esc(STAGE_LABEL[x.stage]||x.stage||'—')}</td>
+      <td class="mono nw">${esc(x.ltv)}</td><td><span class="tag ${x.tier==='vip'||x.tier==='high'?'ok':''}">${esc(x.tier||'—')}</span></td>
+      <td class="mono">${esc(x.propensity)}</td></tr>`).join('')
       || '<tr><td colspan="5" style="color:var(--faint)">暂无数据</td></tr>';
   } catch(e) { /* 静默 */ }
 }
