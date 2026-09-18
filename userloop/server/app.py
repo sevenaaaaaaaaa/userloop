@@ -40,6 +40,7 @@ def create_app(data_dir: str | None = None) -> Any:
     # 免登录端点（自带 token 校验的入站通道；埋点/接入/登录自身）
     public_api = {"/api/v1/ingest", "/api/v1/ingest/batch", "/api/v1/track",
                   "/api/v1/hub/ingest", "/api/v1/hub/mflow/publish",
+                  "/api/v1/loops/trigger", "/api/v1/hub/message",
                   "/api/login", "/api/logout", "/api/auth/me"}
 
     cfg = load_config(data_dir)
@@ -922,6 +923,93 @@ def create_app(data_dir: str | None = None) -> Any:
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
 
+    # ---- 生态互联：被外部系统调用（OpenFlow 画布/自动化 → UserLoop Loop）----
+
+    @app.post(f"{prefix}/api/v1/loops/trigger")
+    async def loops_trigger(request: Request) -> JSONResponse:
+        """外部系统触发 UserLoop Loop：按 template_id 或按触发器（event/stage）启动。
+
+        入参：{template_id?|event?|stage?, distinct_id|email, props?}
+        纪律：仍走 Loop 冷却；执行时再过频控/合规门（外部调用不能绕过护栏）。
+        """
+        _require_token(request, cfg)
+        try:
+            body = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
+        did = str(body.get("distinct_id") or body.get("email") or "").strip()
+        if not did:
+            raise HTTPException(status_code=400, detail="缺少 distinct_id/email")
+        user = await store.find_user(did) or await store.upsert_user(
+            did, email=body.get("email"), props=body.get("props") or {})
+        templates = await store.get_templates(enabled_only=True)
+        tpl_id = str(body.get("template_id") or "")
+        event = str(body.get("event") or "")
+        stage = str(body.get("stage") or "")
+        targets = []
+        for t in templates:
+            if tpl_id and t["id"] == tpl_id:
+                targets.append(t)
+                continue
+            trig = t.get("trigger") or {}
+            if event and trig.get("type") == "event" and trig.get("name") == event:
+                targets.append(t)
+            elif stage and trig.get("type") == "stage_enter" and trig.get("stage") == stage:
+                targets.append(t)
+        if not targets:
+            return JSONResponse({"ok": False, "error": "没有匹配的启用模板",
+                                 "hint": "检查 template_id/event/stage，或先启用模板"})
+        from userloop.core.loops import create_loop_from_template
+
+        created = []
+        for t in targets:
+            loop = await create_loop_from_template(
+                store, t, user, {"type": "external", "event": event, "stage": stage},
+                {"source": str(body.get("source") or "external"), "props": body.get("props") or {}})
+            if loop:
+                created.append({"loop_id": loop["id"], "template_id": t["id"]})
+        # 即期动作立即执行（延迟动作交调度器）
+        if created:
+            from userloop.core.scheduler import process_due_actions
+
+            await process_due_actions(store, ctx)
+        return JSONResponse({"ok": True, "user_id": user["id"], "created": created,
+                             "skipped_cooldown": len(targets) - len(created)})
+
+    # ---- 对话式触达（任何渠道只要能 POST 入站消息即可接入）----
+
+    @app.post(f"{prefix}/api/v1/hub/message")
+    async def hub_message(request: Request) -> JSONResponse:
+        """入站消息 → AI 回复 → 原渠道回出。
+
+        入参：{channel, distinct_id|email|phone|openid, text, webhook_url?（回复地址）}
+        微信/WhatsApp/站内/自定义均可接入（渠道无关）。
+        """
+        _require_token(request, cfg)
+        try:
+            payload = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
+        if isinstance(payload, list):
+            out = []
+            from userloop.touch import conversation
+
+            for item in payload:
+                out.append(await conversation.handle_inbound(store, ctx, item))
+            return JSONResponse({"count": len(out), "results": out})
+        from userloop.touch import conversation
+
+        return JSONResponse(await conversation.handle_inbound(store, ctx, payload))
+
+    @app.get(f"{prefix}/api/v1/conversations")
+    async def conversations(distinct_id: str) -> JSONResponse:
+        user = await store.find_user(distinct_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="user not found")
+        return JSONResponse({"user_id": user["id"], "stage": user.get("stage"),
+                             "messages": await store.list_messages(user["id"], limit=50),
+                             "stats": await store.message_stats()})
+
     # ---- 生态互联（inFlow 洞察 / MFlow 发布回流）----
 
     @app.post(f"{prefix}/api/v1/integrations/inflow/sync")
@@ -966,10 +1054,8 @@ def create_app(data_dir: str | None = None) -> Any:
         """MFlow 发布回调：登记内容 + 开启验证窗口（可用 api_token 保护）。"""
         from userloop.integrations import mflow_publish
 
-        # MFlow 的 webhook 适配器不支持自定义 header → 支持 ?token=<api_token> 校验
-        token = cfg.get("api_token")
-        if token and request.query_params.get("token") != token:
-            raise HTTPException(status_code=401, detail="invalid token")
+        # MFlow 的 webhook 适配器不支持自定义 header → 支持 ?token=<api_token>（_require_token 已统一）
+        _require_token(request, cfg)
         try:
             payload = await request.json()
         except Exception as exc:  # noqa: BLE001
@@ -1389,8 +1475,12 @@ def _md_to_html(md: str) -> str:
 
 
 def _require_token(request: Request, cfg: dict) -> None:
+    """入站鉴权：支持请求头 X-UserLoop-Token 或 query ?token=（后者供只能配 URL 的系统使用）。"""
     token = cfg.get("api_token")
-    if token and request.headers.get("X-UserLoop-Token") != token:
+    if not token:
+        return
+    provided = request.headers.get("X-UserLoop-Token") or request.query_params.get("token")
+    if provided != token:
         raise HTTPException(status_code=401, detail="invalid token")
 
 

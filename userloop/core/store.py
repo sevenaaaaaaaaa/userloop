@@ -149,6 +149,16 @@ CREATE TABLE IF NOT EXISTS h5_campaigns (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, channel, id);
+
 CREATE TABLE IF NOT EXISTS external_insights (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -749,6 +759,36 @@ class Store:
             "WHERE l.user_id=? AND a.executed_at>=? AND a.type NOT IN ('noop')", (user_id, since))
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
+
+    # ---- 对话消息（对话式触达）----
+
+    async def add_message(self, user_id: str, channel: str, role: str, text: str,
+                          ts: str | None = None) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO messages (user_id, channel, role, text, created_at) VALUES (?,?,?,?,?)",
+            (user_id, channel, role, text[:2000], ts or iso_now()),
+        )
+
+    async def list_messages(self, user_id: str, channel: str | None = None, limit: int = 20) -> list[dict]:
+        assert self.db
+        if channel:
+            cur = await self.db.execute(
+                "SELECT role, text, created_at FROM messages WHERE user_id=? AND channel=? "
+                "ORDER BY id DESC LIMIT ?", (user_id, channel, limit))
+        else:
+            cur = await self.db.execute(
+                "SELECT role, text, created_at FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                (user_id, limit))
+        rows = [dict(r) for r in await cur.fetchall()]
+        return list(reversed(rows))          # 按时间正序（供 LLM 上下文）
+
+    async def message_stats(self) -> dict[str, int]:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT COUNT(*) c, SUM(role='user') u, SUM(role='assistant') a FROM messages")
+        r = await cur.fetchone()
+        return {"total": int(r["c"] or 0), "inbound": int(r["u"] or 0), "replies": int(r["a"] or 0)}
 
     # ---- 外部洞察镜像（inFlow 等）----
 

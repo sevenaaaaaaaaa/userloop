@@ -52,6 +52,7 @@ async def dispatch(ctx: Any, action: dict, loop: dict, user: dict, store: Any = 
 
     spec = TouchSpec.from_payload(payload, channel, loop,
                                   template_id=str(payload.get("template_id") or loop.get("template_id") or ""))
+    spec.vars = {**(spec.vars or {}), "payload": payload}   # 驱动可读动作级参数（如对话回复的 webhook）
 
     # 2) 跨渠道全局频控门
     from userloop.touch import frequency as freq_mod

@@ -131,13 +131,14 @@ async def _execute_action(
         ctx.write_outbox({**record, **result})
         return result
 
+    transport = payload.get("_transport")   # 可注入的 HTTP 传输（测试/自定义客户端）
     try:
         if atype == "webhook" or atype == "generic":
             url = payload.get("url") or ctx.default_webhook
             if not url:
                 result.update(ok=True, dry_run=True, note="no url configured; outbox only")
             else:
-                async with httpx.AsyncClient(timeout=10) as client:
+                async with httpx.AsyncClient(timeout=10, transport=transport) as client:
                     resp = await client.post(
                         url,
                         json={"loop_id": loop.get("id"), "template_id": loop.get("template_id"),
@@ -151,7 +152,7 @@ async def _execute_action(
             if not url:
                 result.update(ok=True, dry_run=True, note="no feishu webhook configured; outbox only")
             else:
-                async with httpx.AsyncClient(timeout=10) as client:
+                async with httpx.AsyncClient(timeout=10, transport=transport) as client:
                     resp = await client.post(
                         url, json={"msg_type": "text", "content": {"text": f"[{subject}] {text}"}}
                     )
