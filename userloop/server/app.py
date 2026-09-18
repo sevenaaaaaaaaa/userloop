@@ -964,6 +964,10 @@ def create_app(data_dir: str | None = None) -> Any:
         """MFlow 发布回调：登记内容 + 开启验证窗口（可用 api_token 保护）。"""
         from userloop.integrations import mflow_publish
 
+        # MFlow 的 webhook 适配器不支持自定义 header → 支持 ?token=<api_token> 校验
+        token = cfg.get("api_token")
+        if token and request.query_params.get("token") != token:
+            raise HTTPException(status_code=401, detail="invalid token")
         try:
             payload = await request.json()
         except Exception as exc:  # noqa: BLE001

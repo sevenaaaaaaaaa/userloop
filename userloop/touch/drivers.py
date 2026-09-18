@@ -144,7 +144,8 @@ class H5Driver:
                 spec_title=spec.title, spec_body=spec.body, cta_text=spec.cta_text,
                 cta_link=click_url, goal_id=f"ul-{campaign_key}",
                 brand=str(touch_cfg.get("brand") or ""), mode=str(h5_cfg.get("project_mode") or "h5"),
-                stage=stage, urg=urg)
+                stage=stage, urg=urg,
+                track_back=bool(h5_cfg.get("track_back", True)), ul_base=ul_base)
             res = await websflow.create_and_publish(
                 h5_cfg, name=f"UserLoop · {campaign_key}"[:60], data=data,
                 description=f"UserLoop campaign={campaign_key}（千人千面）",

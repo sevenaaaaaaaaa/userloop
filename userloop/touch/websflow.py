@@ -44,9 +44,32 @@ async def login(cfg: dict, transport: Any = None, force: bool = False) -> str | 
     return None
 
 
+def track_back_snippet(ul_base: str) -> str:
+    """WebsFlow 页面回传脚本（注入 data.global.tracking.custom）。
+
+    - 载入 UserLoop tracker（page_view / element_click 全量回流）
+    - 把 WebsFlow 的访客 id（localStorage.wf_vid）作为 visitor_id 上报
+      → 事件总线按 websflow_visitor 绑定身份，实现跨系统身份链接
+    """
+    return (
+        "(function(){"
+        "function load(){"
+        "var s=document.createElement('script');s.src='" + ul_base + "/track.js';s.defer=true;"
+        "document.head.appendChild(s);"
+        "var t=setInterval(function(){"
+        "if(window.userloop){clearInterval(t);"
+        "try{var v=localStorage.getItem('wf_vid')||'';"
+        "if(v)window.userloop.track('websflow_link',{visitor_id:v});}catch(e){}}},300);"
+        "setTimeout(function(){clearInterval(t);},8000);}"
+        "if(document.readyState==='complete')load();"
+        "else window.addEventListener('load',load);"
+        "})();")
+
+
 def build_page_data(spec_title: str, spec_body: str, cta_text: str, cta_link: str,
                     goal_id: str = "", brand: str = "", mode: str = "h5",
-                    stage: str = "visitor", urg: bool = False) -> dict:
+                    stage: str = "visitor", urg: bool = False,
+                    track_back: bool = True, ul_base: str = "") -> dict:
     """按 WebsFlow 区块契约拼装**千人千面**页面（内容槽位 → 区块 props）。
 
     - 设备：移动/桌面双版主视觉（SSR audience 互斥显示）
@@ -69,7 +92,12 @@ def build_page_data(spec_title: str, spec_body: str, cta_text: str, cta_link: st
     if brand:
         blocks.append({"id": "b_footer", "type": "footer",
                        "props": {"brand": brand, "desc": "", "links": [], "copyright": f"© {brand}"}})
-    return {"segments": pz.segments(), "pages": [{"id": "main", "name": "首页", "slug": "", "blocks": blocks}]}
+    data: dict[str, Any] = {"segments": pz.segments(),
+                            "pages": [{"id": "main", "name": "首页", "slug": "", "blocks": blocks}]}
+    if track_back and ul_base:
+        # 官方扩展点：WebsFlow 发布页支持 global.tracking.custom（自定义脚本注入）
+        data["global"] = {"tracking": {"custom": track_back_snippet(ul_base.rstrip("/"))}}
+    return data
 
 
 async def unpublish_other_projects(cfg: dict, token: str, keep_id: str | None = None,
