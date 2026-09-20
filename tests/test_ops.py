@@ -214,3 +214,13 @@ async def test_alert_run_dedupes_by_cooldown(tmp_path) -> None:
     third = await alerts_mod.run(cfg, _health(age=10))
     assert third["fired"] == []
     assert any(h["code"] == "ingest_stalled" for h in alerts_mod.history(cfg))
+
+
+def test_version_single_source() -> None:
+    """版本唯一来源：__version__ 必须等于 VERSION 文件（防止多处硬编码漂移）。"""
+    import pathlib
+
+    from userloop import __version__
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "VERSION"
+    assert __version__ == root.read_text(encoding="utf-8").strip()
