@@ -144,3 +144,17 @@ AI 提案: 3 条（含 apply_key=frequency.global_gap_hours: 24，影响/风险/
 **验收（线上实测）**：`of_anon_dev1` 浏览建档 → 注册带 `M-1001`+邮箱（同档案）→
 `of_anon_dev2` 带同一 `member_id` → **归并 True**；`openflow_member`/`openflow_visitor` 均可解析；
 WebsFlow 注入脚本含 `form_submit` 抓取与自动 `identify`，且无 `preventDefault`。
+
+
+## 十一、N3 运维加固（v0.6 起）
+
+**看得见**：`/api/v1/health`（存储/事件后端/入库新鲜度/磁盘/调度器/多租户）、
+`/api/v1/metrics`（Prometheus 文本，路由模板归一防标签爆炸）、控制台「运维健康」面板。
+**报得出**：确定性告警 + 冷却去重 + 可选 webhook（`data/ops/`），每 10 分钟自动评估。
+**兜得住**：`VACUUM INTO` 一致性快照 + tar.gz + manifest + 保留策略 + 校验 + 可回滚恢复，每日自动备份；
+CLI `userloop ops backup|backups|verify|restore`。
+**压得动**：`deploy/loadtest.py`（读/写并发压测，RPS + p50/p95/p99）。
+
+**实测（服务器本机，绕过 CDN）**：读 overview 175.8 RPS / p50 58ms / p99 351ms（加缓存击穿保护后
+p99 从 1761ms 降至 351ms）；写 ingest 143.8 RPS / p99 616ms / 0 错误。
+备份 0.62MB 覆盖主库 + 2 租户库；`verify` 通过并正确标注 `events_backend=mysql`（需另行 mysqldump）。

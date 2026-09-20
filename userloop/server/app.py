@@ -59,7 +59,9 @@ def create_app(data_dir: str | None = None) -> Any:
     web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
     from userloop.integrations.probe import capabilities as _caps
 
-    _ver = _caps().get("version") or "0.5.3"
+    from userloop import __version__ as _pkg_ver
+
+    _ver = _caps().get("version") or _pkg_ver
     app = FastAPI(title="UserLoop", version=_ver,
                   description="全域营销数据中枢 + 用户旅程 Loop 引擎。写操作一律走状态机 + 审批门。",
                   openapi_url=f"{prefix}/api/v1/openapi.json",
