@@ -57,7 +57,11 @@ async def main() -> None:
     ap.add_argument("--n", type=int, default=1000, help="总请求数")
     ap.add_argument("--concurrency", type=int, default=20)
     ap.add_argument("--users", type=int, default=100, help="写入模式的用户基数")
+    ap.add_argument("--tenant", default="", help="指定租户（写入测试可打到演示租户，避免污染主租户）")
     args = ap.parse_args()
+    if args.tenant:
+        sep = "&" if "?" in args.base else "?"
+        args.base = f"{args.base}{sep}tenant={args.tenant}"
 
     lat: list[float] = []
     errs: list[str] = []
