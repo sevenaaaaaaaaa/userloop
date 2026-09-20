@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from userloop.actions.executors import ExecutorContext
@@ -41,6 +41,7 @@ def create_app(data_dir: str | None = None) -> Any:
     public_api = {"/api/v1/ingest", "/api/v1/ingest/batch", "/api/v1/track",
                   "/api/v1/hub/ingest", "/api/v1/hub/mflow/publish",
                   "/api/v1/loops/trigger", "/api/v1/hub/message",
+                  "/api/v1/capabilities", "/api/v1/openapi.json", "/api/docs",
                   "/api/login", "/api/logout", "/api/auth/me"}
 
     cfg = load_config(data_dir)
@@ -53,8 +54,13 @@ def create_app(data_dir: str | None = None) -> Any:
     # 聚合看板缓存（10s TTL）：多标签页/多管理员不重复打库（对齐 OpenFlow 性能教训）
     overview_cache: dict[str, Any] = {"ts": 0.0, "stamp": None, "data": None}
     web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
-    app = FastAPI(title="UserLoop", version="0.1.0", description="全域自动化用户运营工具",
-                  docs_url=None, redoc_url=None, redirect_slashes=False)
+    from userloop.integrations.probe import capabilities as _caps
+
+    _ver = _caps().get("version") or "0.5.3"
+    app = FastAPI(title="UserLoop", version=_ver,
+                  description="全域营销数据中枢 + 用户旅程 Loop 引擎。写操作一律走状态机 + 审批门。",
+                  openapi_url=f"{prefix}/api/v1/openapi.json",
+                  docs_url=f"{prefix}/api/docs", redoc_url=None, redirect_slashes=False)
 
     def _page(name: str) -> HTMLResponse:
         with open(os.path.join(web_dir, name), encoding="utf-8") as f:
@@ -94,7 +100,8 @@ def create_app(data_dir: str | None = None) -> Any:
         if path.startswith(prefix):
             rel = path[len(prefix):]
             pages = ("", "/", "/canvas")
-            if rel in public_api or rel.startswith("/static/") or not rel.startswith("/api/"):
+            if (rel in public_api or rel.startswith("/static/") or rel.startswith("/api/docs")
+                    or not rel.startswith("/api/")):
                 # 页面门禁：未登录返回登录页（对齐 MFlow）
                 if authed_mode and rel in pages and not sessions.get(_sid(request)):
                     return _page("login.html")
@@ -113,6 +120,29 @@ def create_app(data_dir: str | None = None) -> Any:
     def _token_ok(request: Request, cfg: dict) -> bool:
         token = cfg.get("api_token")
         return bool(token) and request.headers.get("X-UserLoop-Token") == token
+
+    @app.middleware("http")
+    async def _metrics_mw(request: Request, call_next: Any) -> Any:
+        """请求计数 + 时延直方图（路径按路由模板归一，避免标签基数爆炸）。"""
+        import time
+
+        from userloop.ops.metrics import METRICS
+
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        ms = (time.perf_counter() - t0) * 1000
+        route = request.scope.get("route")
+        path = getattr(route, "path", None)
+        if not path:
+            seg = [s for s in request.url.path.split("/") if s][:3]
+            path = "/" + "/".join(seg)
+        try:
+            METRICS.inc("userloop_http_requests_total",
+                        {"method": request.method, "path": path, "status": str(response.status_code)})
+            METRICS.observe_ms("userloop_http_request_duration_ms", ms, {"path": path})
+        except Exception:  # noqa: BLE001 —— 指标绝不影响请求
+            pass
+        return response
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -172,6 +202,21 @@ def create_app(data_dir: str | None = None) -> Any:
 
         return JSONResponse({**user, "current_tenant": current_tenant()})
 
+    @app.get(f"{prefix}/api/v1/capabilities")
+    async def capabilities() -> JSONResponse:
+        """契约广告（无密钥）：家族系统可按此探测本服务。"""
+        from userloop.agents import planner as _planner
+        from userloop.integrations.probe import capabilities as caps
+        from userloop.plugins.registry import KINDS
+
+        ad = caps()
+        ad["agents"] = {"roles": ["analyst", "content", "outreach", "support"],
+                        "recipes": [r["id"] for r in _planner.list_recipes()]}
+        ad["plugins"] = {"kinds": list(KINDS)}
+        ad["openapi"] = "/api/v1/openapi.json"
+        ad["mcp"] = {"stdio": "userloop-mcp", "writes": "approval"}
+        return JSONResponse(ad)
+
     # ---- ingest ----
 
     @app.post(f"{prefix}/api/v1/ingest")
@@ -181,10 +226,16 @@ def create_app(data_dir: str | None = None) -> Any:
             payload = await request.json()
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
+        from userloop.billing import meter as billing
+
+        gate = await billing.check(store, ctx, "events")
+        if not gate["ok"]:
+            raise HTTPException(status_code=429, detail=gate["reason"])
         try:
             result = await handle(store, ctx, payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await billing.record(store, "events")
         return JSONResponse(result)
 
     @app.post(f"{prefix}/api/v1/ingest/batch")
@@ -196,7 +247,14 @@ def create_app(data_dir: str | None = None) -> Any:
             raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
         if not isinstance(items, list):
             raise HTTPException(status_code=400, detail="body must be a list of events")
+        from userloop.billing import meter as billing
+
+        gate = await billing.check(store, ctx, "events", quantity=max(1, len(items)))
+        if not gate["ok"]:
+            raise HTTPException(status_code=429, detail=gate["reason"])
         results = [await handle(store, ctx, item) for item in items]
+        if results:
+            await billing.record(store, "events", amount=len(results))
         return JSONResponse({"count": len(results), "results": results})
 
     # ---- 旅程埋点采集（web-tracker 插件入口）----
@@ -221,6 +279,10 @@ def create_app(data_dir: str | None = None) -> Any:
                 continue
             await handle(store, ctx, item)
             accepted += 1
+        if accepted:
+            from userloop.billing import meter as billing
+
+            await billing.record(store, "events", amount=accepted)
         return JSONResponse({"accepted": accepted, "throttled": throttled})
 
     @app.get(f"{prefix}/track.js", response_class=HTMLResponse)
@@ -273,6 +335,10 @@ def create_app(data_dir: str | None = None) -> Any:
         src_name = source or "generic"
         with open(os.path.join(raw_dir, f"{src_name}.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": iso_now(), "payload": payload}, ensure_ascii=False, default=str) + "\n")
+        if results:
+            from userloop.billing import meter as billing
+
+            await billing.record(store, "events", amount=len(results))
         return JSONResponse({"source": src_name, "accepted": len(results)})
 
     # ---- 查询 API ----
@@ -401,7 +467,9 @@ def create_app(data_dir: str | None = None) -> Any:
             raise HTTPException(status_code=400, detail="缺少 distinct_id")
         user = await store.find_user(did) or await store.upsert_user(did)
         mapping = {"email": "email", "phone": "phone", "wechat_openid": "wechat_openid",
-                   "wechat_unionid": "wechat_unionid", "wecom_userid": "wecom_userid"}
+                   "wechat_unionid": "wechat_unionid", "wecom_userid": "wecom_userid",
+                   "openflow_member_id": "openflow_member", "openflow_visitor_id": "openflow_visitor",
+                   "mflow_item_id": "mflow_item", "visitor_id": "websflow_visitor"}
         merged = []
         for field, type_ in mapping.items():
             val = body.get(field)
@@ -923,6 +991,91 @@ def create_app(data_dir: str | None = None) -> Any:
                              "degraded": rep["degraded"], "sent": sent,
                              "markdown": rep["markdown"][:4000]})
 
+    # ---- 运维加固（N3）：健康 / 指标 / 备份 / 告警 ----
+
+    @app.get(f"{prefix}/api/v1/health")
+    async def health() -> JSONResponse:
+        from userloop.ops import health as health_mod
+
+        return JSONResponse(await health_mod.check(cfg, store, state.get("sched")))
+
+    @app.get(f"{prefix}/api/v1/metrics")
+    async def metrics(format: str = "prom") -> Any:
+        from userloop.ops.metrics import METRICS
+
+        if format == "json":
+            return JSONResponse(METRICS.snapshot())
+        return PlainTextResponse(METRICS.render_prom(), media_type="text/plain; version=0.0.4")
+
+    @app.get(f"{prefix}/api/v1/ops/overview")
+    async def ops_overview() -> JSONResponse:
+        """控制台运维面板单一端点：健康 + 指标摘要 + 当前告警 + 备份列表。"""
+        from userloop.ops import alerts as alerts_mod
+        from userloop.ops import backup as backup_mod
+        from userloop.ops import health as health_mod
+        from userloop.ops.metrics import METRICS
+
+        h = await health_mod.check(cfg, store, state.get("sched"))
+        snap = METRICS.snapshot()
+        cur = alerts_mod.evaluate(cfg, h, snap)
+        return JSONResponse({
+            "health": h,
+            "metrics": {"uptime_s": snap["uptime_s"], "counters": len(snap["counters"]),
+                        "histograms": len(snap["histograms"])},
+            "alerts_current": cur,
+            "alerts_history": alerts_mod.history(cfg, limit=15),
+            "backups": backup_mod.list_backups(cfg["data_dir"])[:10],
+        })
+
+    @app.get(f"{prefix}/api/v1/ops/backups")
+    async def ops_backups() -> JSONResponse:
+        from userloop.ops import backup as backup_mod
+
+        return JSONResponse({"backups": backup_mod.list_backups(cfg["data_dir"])})
+
+    @app.post(f"{prefix}/api/v1/ops/backup")
+    async def ops_backup(request: Request) -> JSONResponse:
+        import asyncio
+
+        from userloop.ops import backup as backup_mod
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        ops = (cfg.get("ops") or {}).get("backup") or {}
+        keep = int(body.get("keep") or ops.get("keep") or 7)
+        out = await asyncio.to_thread(backup_mod.create, cfg["data_dir"], keep,
+                                      str(body.get("note") or "manual"), cfg)
+        return JSONResponse(out)
+
+    @app.get(f"{prefix}/api/v1/ops/backups/verify")
+    async def ops_backup_verify(name: str) -> JSONResponse:
+        import asyncio
+        import os
+
+        from userloop.ops import backup as backup_mod
+
+        path = os.path.join(cfg["data_dir"], backup_mod.BACKUP_DIR, os.path.basename(name))
+        return JSONResponse(await asyncio.to_thread(backup_mod.verify, path))
+
+    @app.get(f"{prefix}/api/v1/ops/alerts")
+    async def ops_alerts() -> JSONResponse:
+        from userloop.ops import alerts as alerts_mod
+        from userloop.ops import health as health_mod
+
+        h = await health_mod.check(cfg, store, state.get("sched"))
+        return JSONResponse({"current": alerts_mod.evaluate(cfg, h),
+                             "history": alerts_mod.history(cfg, limit=30)})
+
+    @app.post(f"{prefix}/api/v1/ops/alerts/run")
+    async def ops_alerts_run() -> JSONResponse:
+        from userloop.ops import alerts as alerts_mod
+        from userloop.ops import health as health_mod
+
+        h = await health_mod.check(cfg, store, state.get("sched"))
+        return JSONResponse(await alerts_mod.run(cfg, h))
+
     # ---- 运营资产市场（N2）----
 
     @app.get(f"{prefix}/api/v1/assets/packs")
@@ -1199,8 +1352,11 @@ def create_app(data_dir: str | None = None) -> Any:
         dg = await evo.diagnose(store, ctx)
         props = await store.list_evolution_proposals(limit=20)
         lessons = await store.list_lessons(limit=20)
+        from userloop.integrations import probe as probe_mod
+
         return JSONResponse({"telemetry": tel, "diagnostics": dg,
-                             "proposals": props, "lessons": lessons})
+                             "proposals": props, "lessons": lessons,
+                             "probes": probe_mod.load_latest(ctx)})
 
     @app.get(f"{prefix}/api/v1/evolve/diagnose")
     async def evolve_diagnose() -> JSONResponse:
@@ -1250,6 +1406,18 @@ def create_app(data_dir: str | None = None) -> Any:
                                 "detail": str(body.get("detail") or "")[:600],
                                 "fix": str(body.get("fix") or "")[:600], "source": "manual"})
         return JSONResponse({"ok": True})
+
+    @app.get(f"{prefix}/api/v1/integrations/probe")
+    async def probe_status() -> JSONResponse:
+        from userloop.integrations import probe as probe_mod
+
+        return JSONResponse(probe_mod.load_latest(ctx) or {"ok": True, "results": [], "note": "尚未探测"})
+
+    @app.post(f"{prefix}/api/v1/integrations/probe")
+    async def probe_run() -> JSONResponse:
+        from userloop.integrations import probe as probe_mod
+
+        return JSONResponse(await probe_mod.run(ctx))
 
     # ---- 多租户 ----
 
@@ -1526,6 +1694,121 @@ def create_app(data_dir: str | None = None) -> Any:
         n = await predict.run_batch(store, limit=int(body.get("limit") or 50),
                                     data_dir=cfg["data_dir"])
         return JSONResponse({"ok": True, "computed": n})
+
+    # ---- N3 Agent 运营团队 ----
+
+    @app.get(f"{prefix}/api/v1/agents/roles")
+    async def agent_roles() -> JSONResponse:
+        from userloop.agents import roster
+
+        return JSONResponse({"roles": roster.snapshot()})
+
+    @app.get(f"{prefix}/api/v1/agents/recipes")
+    async def agent_recipes() -> JSONResponse:
+        from userloop.agents import planner
+
+        return JSONResponse({"recipes": planner.list_recipes()})
+
+    @app.get(f"{prefix}/api/v1/agents/campaigns")
+    async def agent_campaigns() -> JSONResponse:
+        return JSONResponse({"campaigns": await store.list_campaigns(limit=50)})
+
+    @app.get(f"{prefix}/api/v1/agents/campaigns/{{campaign_id}}")
+    async def agent_campaign_get(campaign_id: str) -> JSONResponse:
+        from userloop.agents import engine as agents
+
+        snap = await agents.snapshot(store, campaign_id)
+        if not snap.get("ok"):
+            raise HTTPException(status_code=404, detail="campaign not found")
+        return JSONResponse(snap)
+
+    @app.post(f"{prefix}/api/v1/agents/campaigns")
+    async def agent_campaign_create(request: Request) -> JSONResponse:
+        from userloop.agents import engine as agents
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        goal = str(body.get("goal") or "").strip()
+        if not goal:
+            raise HTTPException(status_code=400, detail="goal required")
+        target = body.get("target")
+        try:
+            target_f = float(target) if target is not None else None
+        except (TypeError, ValueError):
+            target_f = None
+        return JSONResponse(await agents.create_campaign(
+            store, ctx, goal, target=target_f, budget=body.get("budget"),
+            recipe=body.get("recipe")))
+
+    @app.post(f"{prefix}/api/v1/agents/campaigns/{{campaign_id}}/approve")
+    async def agent_campaign_approve(campaign_id: str) -> JSONResponse:
+        from userloop.agents import engine as agents
+
+        try:
+            return JSONResponse(await agents.approve(store, ctx, campaign_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post(f"{prefix}/api/v1/agents/campaigns/{{campaign_id}}/reject")
+    async def agent_campaign_reject(campaign_id: str, request: Request) -> JSONResponse:
+        from userloop.agents import engine as agents
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            return JSONResponse(await agents.reject(store, campaign_id, reason=str(body.get("reason") or "")))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post(f"{prefix}/api/v1/agents/run-ready")
+    async def agent_run_ready() -> JSONResponse:
+        from userloop.agents import engine as agents
+
+        return JSONResponse({"ran": await agents.run_ready_all(store, ctx)})
+
+    # ---- N4 插件市场 + 计费 + 平台摘要 ----
+
+    @app.get(f"{prefix}/api/v1/plugins")
+    async def plugins_list() -> JSONResponse:
+        from userloop.plugins import registry as plug
+
+        return JSONResponse({"plugins": plug.list_plugins(cfg)})
+
+    @app.get(f"{prefix}/api/v1/plugins/{{plugin_id}}")
+    async def plugins_get(plugin_id: str) -> JSONResponse:
+        from userloop.plugins import registry as plug
+
+        row = plug.get_plugin(cfg, plugin_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="plugin not found")
+        return JSONResponse(row)
+
+    @app.get(f"{prefix}/api/v1/billing/usage")
+    async def billing_usage() -> JSONResponse:
+        from userloop.billing import meter as billing
+
+        return JSONResponse(await billing.snapshot(store, ctx))
+
+    @app.get(f"{prefix}/api/v1/platform")
+    async def platform_summary() -> JSONResponse:
+        from userloop.billing import meter as billing
+        from userloop.core.tenants import TenantRegistry
+        from userloop.plugins import registry as plug
+
+        tenants_list = [{"id": t["id"], "name": t.get("name"), "enabled": t.get("enabled", True)}
+                        for t in TenantRegistry(cfg["data_dir"]).list()]
+        return JSONResponse({
+            "openapi": f"{prefix}/api/v1/openapi.json",
+            "docs": f"{prefix}/api/docs",
+            "mcp": {"stdio": "userloop-mcp", "write_via": "approval"},
+            "plugins": plug.list_plugins(cfg),
+            "tenants": tenants_list,
+            "billing": await billing.snapshot(store, ctx),
+        })
 
     # ---- 运维 API ----
 

@@ -58,10 +58,10 @@ Shopify/广告/HubSpot(hub/ingest) ──────┤
 
 - 不做站内 CMS/课程/商店（OpenFlow 已有）——UserLoop 不吞并，只联动
 - 不替任何系统发布（MFlow 铁律）/不写外部 MA 的敏感操作
-- MCP Server 只读 —— 写操作一律回到 UserLoop 自己的 Loop 状态机 + 审计
+- MCP / OpenAPI 可写，但写操作一律回到 UserLoop 自己的状态机 + 审批门（不直接改模板、不直接发触达）
 
 ## 下一步（按价值排序）
 
 1. 广告平台拉取型 source 插件（GA4/Google Ads OAuth 拉取）→ `hub/ingest` 定时喂数
 2. Canvas/模板效果数据反哺 OpenFlow 后台卡片（经其插件 API）
-3. 多租户 workspace（服务多个站点/客户）
+3. 战役效果自动对照验收口径（复购率窗口到期后回写 feedback）

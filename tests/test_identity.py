@@ -220,3 +220,54 @@ async def test_websflow_form_snippet_auto_identifies() -> None:
     # 不拦截表单：无 preventDefault
     assert "preventDefault" not in js
     assert "https://nownexts.com/userloop/track.js" in js
+
+
+async def test_mflow_item_binds_and_publish_resolves(store: Store, tmp_path) -> None:
+    """选题创建绑 mflow_item；发布回流按 item_id 认回同一用户。"""
+    from userloop.integrations import mflow_publish
+
+    ctx = _ctx(tmp_path)
+    ctx.store = store
+    r0 = await handle(store, ctx, {"distinct_id": "mf_u", "email": "mf@x.com", "event": "signup"})
+    await store.bind_identity(r0["user_id"], "mflow_item", "ul-churn-abc", source="mflow.create_content")
+    out = await mflow_publish.record_publish(store, {
+        "item_id": "ul-churn-abc", "title": "召回", "url": "https://x/r"})
+    assert out["ok"] and out["identity"]["bound"] is True
+    assert out["identity"]["user_id"] == r0["user_id"]
+    assert await store.resolve_identity("mflow_item", "ul-churn-abc") == r0["user_id"]
+
+
+async def test_shopify_nested_email_identifies(store: Store, tmp_path) -> None:
+    """Shopify 订单只在 customer.email 里时也应实名（顺着已有字段，不另造采集点）。"""
+    ctx = _ctx(tmp_path)
+    r = await handle(store, ctx, {
+        "distinct_id": "shop_anon", "event": "purchase",
+        "props": {"customer": {"email": "buyer@shop.com"}, "amount": 99},
+    })
+    user = await store.get_user(r["user_id"])
+    assert user and user.get("email") == "buyer@shop.com"
+    assert await store.resolve_identity("email", "buyer@shop.com") == r["user_id"]
+
+
+async def test_track_js_form_submit_identifies(tmp_path) -> None:
+    """主站 track.js 也要顺着表单抬实名（任意嵌入站点，不只 WebsFlow）。"""
+    from userloop.server.app import create_app
+    from userloop.tracking.snippet import snippet
+
+    js = snippet("https://x/api/v1/track")
+    assert "form_submit" in js and "identify" in js
+    assert "preventDefault" not in js
+    assert js.count("{") == js.count("}")
+
+    app = create_app(str(tmp_path))
+    with TestClient(app) as client:
+        r = client.post("/api/v1/track", json={"events": [
+            {"distinct_id": "anon_form", "event": "form_submit",
+             "props": {"email": "form@x.com"}, "event_id": "f-1"},
+            {"distinct_id": "anon_form", "event": "identify",
+             "props": {"email": "form@x.com"}, "event_id": "f-2"},
+        ]}).json()
+        assert r["accepted"] == 2
+        users = client.get("/api/v1/users").json()["users"]
+        u = next(x for x in users if x["distinct_id"] == "anon_form")
+        assert u["email"] == "form@x.com"

@@ -325,6 +325,42 @@ CREATE TABLE IF NOT EXISTS ai_decisions (
 CREATE INDEX IF NOT EXISTS idx_ai_user ON ai_decisions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_status ON ai_decisions(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_created ON ai_decisions(created_at);
+
+CREATE TABLE IF NOT EXISTS agent_campaigns (
+    id TEXT PRIMARY KEY,
+    goal TEXT NOT NULL,
+    metric TEXT NOT NULL DEFAULT '',
+    target REAL,
+    status TEXT NOT NULL DEFAULT 'planning',
+    budget TEXT NOT NULL DEFAULT '{}',
+    plan TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON agent_campaigns(status, created_at);
+
+CREATE TABLE IF NOT EXISTS agent_tasks (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    title TEXT NOT NULL,
+    tool TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}',
+    risk TEXT NOT NULL DEFAULT 'low',
+    status TEXT NOT NULL DEFAULT 'pending',
+    result TEXT NOT NULL DEFAULT '{}',
+    seq INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_campaign ON agent_tasks(campaign_id, seq);
+
+CREATE TABLE IF NOT EXISTS usage_ledger (
+    day TEXT NOT NULL,
+    meter TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, meter)
+);
 """
 
 
@@ -1414,6 +1450,109 @@ class Store:
             row = await cur.fetchone()
             out[table] = row["c"] if row else 0
         return out
+
+    # ---- N3 Agent 战役 / 任务 ----
+
+    async def put_campaign(self, row: dict) -> dict:
+        assert self.db
+        now = iso_now()
+        await self.db.execute(
+            "INSERT INTO agent_campaigns (id, goal, metric, target, status, budget, plan, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "goal=excluded.goal, metric=excluded.metric, target=excluded.target, status=excluded.status, "
+            "budget=excluded.budget, plan=excluded.plan, updated_at=excluded.updated_at",
+            (row["id"], row["goal"], row.get("metric", ""), row.get("target"),
+             row.get("status", "planning"), j(row.get("budget") or {}), j(row.get("plan") or {}),
+             row.get("created_at") or now, now))
+        return await self.get_campaign(row["id"])  # type: ignore[return-value]
+
+    async def get_campaign(self, campaign_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM agent_campaigns WHERE id=?", (campaign_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["budget"] = pj(d.get("budget"), {}) or {}
+        d["plan"] = pj(d.get("plan"), {}) or {}
+        return d
+
+    async def list_campaigns(self, status: str | None = None, limit: int = 30) -> list[dict]:
+        assert self.db
+        if status:
+            cur = await self.db.execute(
+                "SELECT * FROM agent_campaigns WHERE status=? ORDER BY created_at DESC LIMIT ?",
+                (status, limit))
+        else:
+            cur = await self.db.execute(
+                "SELECT * FROM agent_campaigns ORDER BY created_at DESC LIMIT ?", (limit,))
+        out = []
+        for r in await cur.fetchall():
+            d = dict(r)
+            d["budget"] = pj(d.get("budget"), {}) or {}
+            d["plan"] = pj(d.get("plan"), {}) or {}
+            out.append(d)
+        return out
+
+    async def put_agent_task(self, row: dict) -> dict:
+        assert self.db
+        now = iso_now()
+        await self.db.execute(
+            "INSERT INTO agent_tasks (id, campaign_id, role, title, tool, payload, risk, status, result, seq, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET status=excluded.status, result=excluded.result, updated_at=excluded.updated_at",
+            (row["id"], row["campaign_id"], row["role"], row["title"], row.get("tool", ""),
+             j(row.get("payload") or {}), row.get("risk", "low"), row.get("status", "pending"),
+             j(row.get("result") or {}), int(row.get("seq") or 0),
+             row.get("created_at") or now, now))
+        return row
+
+    async def list_agent_tasks(self, campaign_id: str) -> list[dict]:
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT * FROM agent_tasks WHERE campaign_id=? ORDER BY seq, created_at", (campaign_id,))
+        out = []
+        for r in await cur.fetchall():
+            d = dict(r)
+            d["payload"] = pj(d.get("payload"), {}) or {}
+            d["result"] = pj(d.get("result"), {}) or {}
+            out.append(d)
+        return out
+
+    async def get_agent_task(self, task_id: str) -> dict | None:
+        assert self.db
+        cur = await self.db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["payload"] = pj(d.get("payload"), {}) or {}
+        d["result"] = pj(d.get("result"), {}) or {}
+        return d
+
+    async def add_usage(self, meter: str, quantity: int = 1, day: str | None = None) -> int:
+        """日用量累加（计费/配额）。"""
+        assert self.db
+        d = day or datetime.utcnow().date().isoformat()
+        await self.db.execute(
+            "INSERT INTO usage_ledger (day, meter, quantity) VALUES (?,?,?) "
+            "ON CONFLICT(day, meter) DO UPDATE SET quantity=quantity+excluded.quantity",
+            (d, meter, int(quantity)))
+        cur = await self.db.execute(
+            "SELECT quantity FROM usage_ledger WHERE day=? AND meter=?", (d, meter))
+        row = await cur.fetchone()
+        return int(row["quantity"]) if row else int(quantity)
+
+    async def usage_today(self, meter: str | None = None) -> dict[str, int]:
+        assert self.db
+        day = datetime.utcnow().date().isoformat()
+        if meter:
+            cur = await self.db.execute(
+                "SELECT quantity FROM usage_ledger WHERE day=? AND meter=?", (day, meter))
+            row = await cur.fetchone()
+            return {meter: int(row["quantity"]) if row else 0}
+        cur = await self.db.execute("SELECT meter, quantity FROM usage_ledger WHERE day=?", (day,))
+        return {r["meter"]: int(r["quantity"]) for r in await cur.fetchall()}
 
 
 def iso_now() -> str:

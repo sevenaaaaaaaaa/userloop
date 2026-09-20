@@ -9,7 +9,7 @@
 事件总线 / 自有 CDP-lite（8 阶段旅程 + 断点）/ Loop 引擎（模板 + 验证回流）/ Canvas 图执行 /
 AI 大脑（NBA 决策 + 频控/静默期/预算 + 风险审批门）/ 触点（邮件 HTML+追踪+退订+抑制、短信三供应商、
 H5 双引擎 + 六维千面、IM、HubSpot、OpenFlow/MFlow 互通）/ A/B 版式实验（显著性 + 提升）/
-身份图谱 / 验收入口（控制台、A-B、AI 决策、MCP 只读回读）。
+身份图谱 / 验收入口（控制台、A-B、AI 决策、MCP 回读 + 审批门写入）。
 
 ## 二、使用者（运营人员）视角
 
@@ -104,14 +104,15 @@ AI 提案: 3 条（含 apply_key=frequency.global_gap_hours: 24，影响/风险/
 应用 → 生效并记录旧值；回滚 → 删除该键回到默认；两次操作均写入 Lessons
 ```
 
-**下一步（N1 生态互联）**
+**N1 收尾（已完成）**
 | 优先级 | 事项 | 说明 |
 |---|---|---|
-| P0 | inFlow 洞察 → UserLoop Loop | 情报系统的竞品/流量洞察自动变成运营动作（最短闭环）|
-| P0 | MFlow 发布结果回流 → 验证窗口 | 内容是否带来转化（内容归因）|
-| P1 | WebsFlow 页内事件回流 | 落地页浏览/表单 → `/api/v1/hub/ingest` |
-| P1 | 跨系统身份映射 | OpenFlow member_id ↔ UserLoop user ↔ WebsFlow visitor |
-| P2 | 对话式触达 | 微信/WhatsApp AI 跟进（需外部凭据）|
+| ✅ | inFlow 洞察 → UserLoop Loop | 情报系统的竞品/流量洞察自动变成运营动作 |
+| ✅ | MFlow 发布结果回流 → 验证窗口 | 内容是否带来转化（内容归因）|
+| ✅ | WebsFlow 页内事件回流 | 落地页浏览/表单 + 自动实名 |
+| ✅ | 跨系统身份映射 | OpenFlow member_id / WebsFlow visitor / **MFlow mflow_item 选题回传** |
+| ✅ | 契约探测 + 每日断链告警 | `GET /api/v1/capabilities` + 每 6h 探测家族 API，断链进自诊断 |
+| P2 | 对话式触达（凭据） | 微信/WhatsApp AI 跟进（框架已在，需外部凭据）|
 
 
 ## 九、N2 运营资产市场（v0.5 起）

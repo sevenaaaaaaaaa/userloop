@@ -1,12 +1,11 @@
-"""UserLoop MCP Server（stdio）—— 联动通道③：只读回读旅程数据.
+"""UserLoop MCP Server（stdio）—— 双向：读旅程 + 写操作走状态机/审批门.
 
 供 OpenFlow AgentRuntime（mcp:* 工具通道）、Claude/Cursor 等 MCP 客户端消费：
-  userloop_dashboard  全局看板（漏斗/Loop 状态/模板效果）
-  userloop_journey    单用户旅程（档案 + 阶段迁移 + 最近事件）
-  userloop_loops      Loop 运行列表（可按状态过滤）
-  userloop_feedback   模板级验证回流统计
+  只读：userloop_dashboard / journey / loops / feedback / plugins / usage
+  写入：userloop_create_campaign / userloop_approve_campaign
+        （只创建草稿战役或走审批，不直接改模板、不直接发触达）
 
-运行：userloop mcp   （stdio，只读，不暴露写操作）
+运行：userloop mcp
 """
 
 from __future__ import annotations
@@ -26,14 +25,17 @@ def _load_cfg() -> dict:
     return load_config()
 
 
-async def _with_store(fn: Any) -> Any:
+async def _with_store(fn: Any, with_ctx: bool = False) -> Any:
+    from userloop.actions.executors import ExecutorContext
     from userloop.core.store import Store
 
     cfg = _load_cfg()
     store = Store(cfg["db_path"], cfg)
     await store.connect()
+    ctx = ExecutorContext(cfg["data_dir"], cfg)
+    ctx.store = store
     try:
-        return await fn(store)
+        return await fn(store, ctx) if with_ctx else await fn(store)
     finally:
         await store.close()
 
@@ -107,6 +109,59 @@ async def userloop_feedback(template_id: str = "") -> str:
         return stats
 
     return _j(await _with_store(run))
+
+
+@mcp.tool()
+async def userloop_list_campaigns() -> str:
+    """N3 战役列表（目标拆解后的状态：pending_approval / running / done）。"""
+    async def run(store: Any) -> list:
+        return await store.list_campaigns(limit=30)
+
+    return _j(await _with_store(run))
+
+
+@mcp.tool()
+async def userloop_create_campaign(goal: str) -> str:
+    """把运营目标拆成跨角色任务。含中风险动作时进入待审批，不会直接启用 Loop 或对外触达。"""
+    async def run(store: Any, ctx: Any) -> dict:
+        from userloop.agents import engine as agents
+
+        return await agents.create_campaign(store, ctx, goal)
+
+    return _j(await _with_store(run, with_ctx=True))
+
+
+@mcp.tool()
+async def userloop_approve_campaign(campaign_id: str) -> str:
+    """批准战役：仅通过 UserLoop 状态机执行白名单任务（草稿 Loop 默认停用）。"""
+    async def run(store: Any, ctx: Any) -> dict:
+        from userloop.agents import engine as agents
+
+        return await agents.approve_campaign(store, ctx, campaign_id)
+
+    return _j(await _with_store(run, with_ctx=True))
+
+
+@mcp.tool()
+async def userloop_list_plugins() -> str:
+    """N4 插件市场：source / action / model / template。"""
+    async def run(store: Any) -> list:
+        from userloop.plugins import registry as plug
+
+        return plug.list_plugins(_load_cfg())
+
+    return _j(await _with_store(run))
+
+
+@mcp.tool()
+async def userloop_usage() -> str:
+    """当前租户今日用量与配额（默认只记账；billing.enforce 才拦截）。"""
+    async def run(store: Any, ctx: Any) -> dict:
+        from userloop.billing import meter as billing
+
+        return await billing.snapshot(store, ctx)
+
+    return _j(await _with_store(run, with_ctx=True))
 
 
 def main() -> None:

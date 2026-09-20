@@ -84,6 +84,14 @@
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7l8-4 8 4-8 4-8-4Z"/><path d="M4 12l8 4 8-4M4 17l8 4 8-4"/></svg>
       资产市场
     </a>
+    <a class="nv" href="#sec-agents" data-sec="sec-agents">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><circle cx="12" cy="16" r="3"/><path d="M10.5 10 12 13M13.5 10 12 13"/></svg>
+      Agent 团队
+    </a>
+    <a class="nv" href="#sec-platform" data-sec="sec-platform">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      插件与计费
+    </a>
     <a class="nv" href="#sec-eco" data-sec="sec-eco">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7l3 3M17 7l-3 3M7 17l3-3M17 17l-3-3"/></svg>
       生态互联
@@ -91,6 +99,10 @@
     <a class="nv" href="#sec-evolve" data-sec="sec-evolve">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/><path d="M12 8v4l3 2"/></svg>
       自进化
+    </a>
+    <a class="nv" href="#sec-ops" data-sec="sec-ops">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/><path d="M12 8v4l2.5 1.5"/></svg>
+      运维健康
     </a>
     <a class="nv" href="#sec-report" data-sec="sec-report">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h5M9 8h4"/></svg>
@@ -279,6 +291,44 @@
       </div>
     </section>
 
+    <section id="sec-agents">
+      <div class="panel">
+        <div class="p-head"><h3>智能体运营团队</h3>
+          <span class="p-sub" id="agSub">分析 / 内容 / 触达 / 客服 拆解目标，人只审批</span></div>
+        <div class="p-body">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input id="agGoal" class="code" style="flex:1;min-width:220px;min-height:36px" value="本月复购率 +10%" />
+            <button class="btn primary sm" onclick="agCreate()">拆解并排队</button>
+            <button class="btn ghost sm" onclick="agLoad()">刷新</button>
+          </div>
+          <div id="agRoles" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="p-head"><h3>战役</h3><span class="p-sub">中风险任务等人审；批准后才起草 Loop / 套用资产</span></div>
+        <div class="p-body"><table><thead><tr><th>目标</th><th>配方</th><th>状态</th><th>操作</th></tr></thead><tbody id="agCamps"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <div class="p-head"><h3>任务明细</h3><span class="p-sub" id="agTaskSub">点战役「查看」</span></div>
+        <div class="p-body"><table><thead><tr><th>角色</th><th>工具</th><th>风险</th><th>状态</th><th>标题</th></tr></thead><tbody id="agTasks"></tbody></table></div>
+      </div>
+    </section>
+
+    <section id="sec-platform">
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>插件市场</h3>
+            <span class="p-sub">source / action / model / template · 磁盘可覆盖</span>
+            <a class="btn ghost sm" href="api/docs" target="_blank" rel="noopener">OpenAPI 文档</a></div>
+          <div class="p-body"><table><thead><tr><th>插件</th><th>类型</th><th>版本</th><th>说明</th></tr></thead><tbody id="pfPlugins"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>租户用量</h3><span class="p-sub" id="pfBillSub">默认只记账；billing.enforce 才拦截</span></div>
+          <div class="p-body"><table><thead><tr><th>计量</th><th>今日</th><th>配额</th><th>剩余</th></tr></thead><tbody id="pfMeters"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
     <section id="sec-eco">
       <div class="panels p2">
         <div class="panel">
@@ -291,6 +341,11 @@
             <button class="btn ghost sm" onclick="ecoVerify()">检查到期</button></div>
           <div class="p-body"><table><thead><tr><th>内容</th><th>发布</th><th>窗口</th><th>结论</th></tr></thead><tbody id="ecoPubs"></tbody></table></div>
         </div>
+      </div>
+      <div class="panel">
+        <div class="p-head"><h3>契约探测</h3><span class="p-sub" id="probeSub">每 6 小时探测家族 API，断链进自诊断</span>
+          <button class="btn ghost sm" onclick="ecoProbe()">立即探测</button></div>
+        <div class="p-body"><table><thead><tr><th>系统</th><th class="nw">状态</th><th class="nw">延迟</th><th>说明</th></tr></thead><tbody id="ecoProbes"></tbody></table></div>
       </div>
     </section>
 
@@ -310,6 +365,28 @@
       <div class="panel">
         <div class="p-head"><h3>Lessons（错误只犯一次）</h3><span class="p-sub">自进化沉淀</span></div>
         <div class="p-body" id="evoLessons" style="font-size:var(--fs-lg);line-height:1.9"></div>
+      </div>
+    </section>
+
+    <section id="sec-ops">
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>健康检查</h3><span class="p-sub" id="opsSub">—</span>
+            <button class="btn ghost sm" onclick="opsLoad()">重新检查</button></div>
+          <div class="p-body"><table><thead><tr><th>检查项</th><th>状态</th><th>详情</th></tr></thead><tbody id="opsChecks"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>当前告警</h3>
+            <span class="p-sub">带冷却去重 · 可配 webhook 外送</span>
+            <button class="btn ghost sm" onclick="opsAlertsRun()">评估并外送</button></div>
+          <div class="p-body"><table><thead><tr><th>级别</th><th>问题</th><th>建议</th></tr></thead><tbody id="opsAlerts"></tbody></table></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="p-head"><h3>备份</h3>
+          <span class="p-sub">SQLite 一致性快照 · 每日自动 · 保留最近 N 份 · 指标见 <a class="mono" href="api/v1/metrics" target="_blank" rel="noopener">/api/v1/metrics</a></span>
+          <button class="btn primary sm" onclick="opsBackup()">立即备份</button></div>
+        <div class="p-body"><table><thead><tr><th>文件</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="opsBackups"></tbody></table></div>
       </div>
     </section>
 
@@ -347,10 +424,10 @@ function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('sho
 const UL_I18N = {
   'zh-CN': {overview:'运营总览', journey:'旅程漏斗', loops:'Loop 运行', users:'用户档案', events:'事件流',
             copilot:'Copilot 建流程', ai:'AI 大脑', predict:'预测洞察', segments:'智能分群',
-            report:'运营周报', ab:'A/B 实验', canvas:'画布编排'},
+            report:'运营周报', ab:'A/B 实验', canvas:'画布编排', agents:'Agent 团队', platform:'插件与计费'},
   'en-US': {overview:'Overview', journey:'Journey', loops:'Loops', users:'Users', events:'Events',
             copilot:'Copilot', ai:'AI Brain', predict:'Predictions', segments:'Segments',
-            report:'Weekly Report', ab:'A/B Tests', canvas:'Canvas'},
+            report:'Weekly Report', ab:'A/B Tests', canvas:'Canvas', agents:'Agent Team', platform:'Plugins'},
 };
 function currentLang(){ try { return localStorage.getItem('ul_lang') || 'zh-CN'; } catch(e){ return 'zh-CN'; } }
 function toggleLang(){
@@ -359,7 +436,9 @@ function toggleLang(){
   applyLang();
 evoLoad();
 ecoLoad();
-asLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
+asLoad();
+agLoad();
+pfLoad(); toast(next === 'en-US' ? 'Language: English' : '语言：简体中文');
 }
 function applyLang(){
   const dict = UL_I18N[currentLang()] || UL_I18N['zh-CN'];
@@ -368,7 +447,9 @@ function applyLang(){
                ['#sidebar a.nv[data-sec=\'sec-events\']','events'], ['#sidebar a.nv[data-sec=\'sec-copilot\']','copilot'],
                ['#sidebar a.nv[data-sec=\'sec-ai\']','ai'], ['#sidebar a.nv[data-sec=\'sec-predict\']','predict'],
                ['#sidebar a.nv[data-sec=\'sec-segments\']','segments'], ['#sidebar a.nv[data-sec=\'sec-report\']','report'],
-               ['#sidebar a.nv[data-sec=\'sec-ab\']','ab']];
+               ['#sidebar a.nv[data-sec=\'sec-ab\']','ab'],
+               ['#sidebar a.nv[data-sec=\'sec-agents\']','agents'],
+               ['#sidebar a.nv[data-sec=\'sec-platform\']','platform']];
   map.forEach(([sel, key])=>{
     const el = document.querySelector(sel);
     if (!el) return;
@@ -587,10 +668,56 @@ async function asExport(){
   a.download = `${r.id}.json`; a.click();
   toast('已导出资产包（仅定义，不含用户数据）');
 }
+function _probeRow(r){
+  const st = r.status || '—';
+  const cls = st==='ok'?'ok':st==='down'?'danger':st==='warn'?'warn':'';
+  const note = r.error || r.note || r.url || '';
+  return `<tr><td class="wrap">${esc(r.name||r.id)}<div class="mono cellsub">${esc(r.id||'')}</div></td>
+    <td class="nw"><span class="tag ${cls}">${esc(st)}</span></td>
+    <td class="nw mono">${r.ms!=null?esc(r.ms)+'ms':'—'}</td>
+    <td class="wrap mono" style="color:var(--muted)" title="${esc(note)}">${esc(String(note).slice(0,80))}</td></tr>`;
+}
+async function opsLoad(){
+  const r = await j('api/v1/ops/overview');
+  const h = r.health || {};
+  $('opsSub').textContent = `${h.version||''} · ${h.status||'—'} · uptime ${Math.round((r.metrics||{}).uptime_s||0)}s`;
+  $('opsChecks').innerHTML = (h.checks||[]).map(c=>`
+    <tr><td class="mono nw">${esc(c.name)}</td>
+    <td><span class="tag ${c.ok?'ok':'danger'}">${c.ok?'ok':'fail'}</span></td>
+    <td class="wrap" style="color:var(--muted)">${esc(c.detail)}</td></tr>`).join('')
+    || '<tr><td colspan="3" style="color:var(--faint)">无数据</td></tr>';
+  $('opsAlerts').innerHTML = (r.alerts_current||[]).map(a=>`
+    <tr><td><span class="tag ${a.severity==='high'?'danger':'warn'}">${esc(a.severity)}</span></td>
+    <td class="wrap"><b>${esc(a.title)}</b><div class="cellsub">${esc(a.detail)}</div></td>
+    <td class="wrap" style="color:var(--muted)">${esc(a.suggestion)}</td></tr>`).join('')
+    || '<tr><td colspan="3" style="color:var(--ok)">✓ 无告警</td></tr>';
+  $('opsBackups').innerHTML = (r.backups||[]).map(b=>`
+    <tr><td class="mono ellip" title="${esc(b.name)}">${esc(b.name)}</td>
+    <td class="mono">${(b.bytes/1e6).toFixed(2)} MB</td>
+    <td class="mono" style="color:var(--faint)">${esc(b.created_at)}</td>
+    <td><button class="btn ghost sm" onclick="opsVerify(${jsArg(b.name)})">校验</button></td></tr>`).join('')
+    || '<tr><td colspan="4" style="color:var(--faint)">暂无备份（点「立即备份」）</td></tr>';
+}
+async function opsBackup(){
+  toast('备份中…');
+  const r = await (await fetch('api/v1/ops/backup', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+  toast(r.ok ? `已备份 ${r.name}（${(r.bytes/1e6).toFixed(2)} MB）` : ('备份失败：'+(r.error||'')));
+  opsLoad();
+}
+async function opsVerify(name){
+  const r = await j(`api/v1/ops/backups/verify?name=${enc(name)}`);
+  toast(r.ok ? '校验通过（gzip/manifest/SQLite 头）' : ('校验失败：'+(((r.problems||[]).join('；'))||r.error||'')));
+}
+async function opsAlertsRun(){
+  const r = await (await fetch('api/v1/ops/alerts/run', {method:'POST'})).json();
+  toast(`新增告警 ${(r.fired||[]).length} 条 · 抑制 ${(r.suppressed||[]).length} 条`);
+  opsLoad();
+}
 async function ecoLoad(){
   try {
-    const [ins, pubs] = await Promise.all([j('api/v1/integrations/inflow/insights?limit=10'),
-                                           j('api/v1/content/publications?limit=10')]);
+    const [ins, pubs, probes] = await Promise.all([j('api/v1/integrations/inflow/insights?limit=10'),
+                                           j('api/v1/content/publications?limit=10'),
+                                           j('api/v1/integrations/probe')]);
     $('ecoInsights').innerHTML = (ins.insights||[]).map(x=>`
       <tr><td>${esc((x.title||'').slice(0,42))}<div class="mono" style="color:var(--faint)">${esc(x.type)} · conf ${esc(x.confidence??'—')}</div></td>
       <td><span class="tag ${x.severity==='high'||x.severity==='critical'?'danger':x.severity==='medium'?'warn':''}">${esc(x.severity||'—')}</span></td>
@@ -603,7 +730,21 @@ async function ecoLoad(){
       <td class="mono" style="color:var(--faint)">→${esc((p.verify_before||'').slice(0,10))}</td>
       <td>${p.status==='verified'?`<span class="tag ${p.verdict==='effective'?'ok':''}">${esc(p.verdict||'—')}</span>`:'<span class="tag warn">验证中</span>'}</td></tr>`).join('')
       || '<tr><td colspan="4" style="color:var(--faint)">暂无发布记录（等 MFlow 回流）</td></tr>';
+    const rows = (probes.results||[]);
+    const c = probes.counts || {};
+    $('probeSub').textContent = probes.at
+      ? `${String(probes.at).slice(11,19)} · 通 ${c.ok||0} · 告警 ${c.warn||0} · 断 ${c.down||0} · 未配 ${c.skipped||0}`
+      : '尚未探测（点「立即探测」）';
+    $('ecoProbes').innerHTML = rows.map(_probeRow).join('')
+      || '<tr><td colspan="4" style="color:var(--faint)">尚未探测</td></tr>';
   } catch(e) {}
+}
+async function ecoProbe(){
+  toast('探测家族 API 中…');
+  const r = await (await fetch('api/v1/integrations/probe', {method:'POST'})).json();
+  const c = r.counts || {};
+  toast(r.ok ? `探测完成：通 ${c.ok||0} · 断 ${c.down||0}` : `有断链 ${c.down||0} 条`);
+  ecoLoad();
 }
 async function ecoInflowSync(){
   toast('同步 inFlow 洞察中…');
@@ -836,6 +977,76 @@ async function aiReject(id){
   toast('已驳回'); load(true);
 }
 
+const AG_TAG = {pending_approval:'warn', planning:'warn', running:'ok', done:'ok', rejected:'danger'};
+async function agLoad(){
+  try{
+    const [roles, camps] = await Promise.all([j('api/v1/agents/roles'), j('api/v1/agents/campaigns')]);
+    $('agRoles').innerHTML = (roles.roles||[]).map(r=>
+      `<span class="tag">${esc(r.name)} · ${esc((r.tools||[]).slice(0,3).join('/'))}</span>`).join('')
+      || '<span style="color:var(--faint)">无角色</span>';
+    $('agCamps').innerHTML = (camps.campaigns||[]).map(c=>{
+      const st = c.status||'';
+      const rec = (c.plan||{}).recipe||'';
+      return `<tr><td class="wrap">${esc(c.goal)}<div class="mono" style="color:var(--faint)">${esc(c.id)}</div></td>
+        <td class="nw">${esc(rec)}</td>
+        <td class="nw"><span class="tag ${AG_TAG[st]||''}">${esc(st)}</span></td>
+        <td class="nw"><button class="btn ghost sm" onclick="agShow(${jsArg(c.id)})">查看</button>
+          ${st==='pending_approval'||st==='planning'||st==='running'
+            ? `<button class="btn primary sm" onclick="agApprove(${jsArg(c.id)})">批准</button>
+               <button class="btn ghost sm" onclick="agReject(${jsArg(c.id)})">驳回</button>` : ''}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" style="color:var(--faint)">还没有战役。输入目标后点「拆解并排队」</td></tr>';
+  }catch(e){ $('agCamps').innerHTML = `<tr><td colspan="4">${esc(e.message)}</td></tr>`; }
+}
+async function agCreate(){
+  const goal = $('agGoal').value.trim();
+  if (!goal) { toast('先写运营目标'); return; }
+  toast('拆解中…');
+  const r = await (await fetch('api/v1/agents/campaigns', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({goal})})).json();
+  toast(r.ok ? (r.needs_approval ? '已拆解，等人审（低风险任务已先跑）' : '已拆解并执行') : ('失败：'+(r.detail||r.error||'')));
+  await agLoad();
+  if (r.campaign && r.campaign.id) agShow(r.campaign.id);
+}
+async function agShow(id){
+  const r = await j('api/v1/agents/campaigns/'+encodeURIComponent(id));
+  $('agTaskSub').textContent = (r.campaign||{}).goal || id;
+  $('agTasks').innerHTML = (r.tasks||[]).map(t=>`
+    <tr><td class="nw">${esc(t.role_name||t.role)}</td><td class="mono nw">${esc(t.tool)}</td>
+    <td class="nw"><span class="tag ${t.risk==='medium'?'warn':''}">${esc(t.risk)}</span></td>
+    <td class="nw"><span class="tag ${t.status==='done'?'ok':t.status==='failed'?'danger':t.status==='pending'?'warn':''}">${esc(t.status)}</span></td>
+    <td class="wrap">${esc(t.title)}</td></tr>`).join('')
+    || '<tr><td colspan="5" style="color:var(--faint)">无任务</td></tr>';
+}
+async function agApprove(id){
+  const r = await (await fetch(`api/v1/agents/campaigns/${encodeURIComponent(id)}/approve`, {method:'POST'})).json();
+  toast(r.ok ? '已批准，Agent 开始执行中风险任务' : ('失败：'+(r.error||r.detail||'')));
+  await agLoad(); agShow(id);
+}
+async function agReject(id){
+  if (!confirm('驳回该战役？未执行的中风险任务将取消')) return;
+  const r = await (await fetch(`api/v1/agents/campaigns/${encodeURIComponent(id)}/reject`,
+    {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json();
+  toast(r.ok ? '已驳回' : ('失败：'+(r.error||'')));
+  await agLoad();
+}
+async function pfLoad(){
+  try{
+    const r = await j('api/v1/platform');
+    const kinds = {source:'入站', action:'出站', model:'模型', template:'模板'};
+    $('pfPlugins').innerHTML = (r.plugins||[]).map(p=>`
+      <tr><td>${esc(p.name)}<div class="mono" style="color:var(--faint)">${esc(p.id)}</div></td>
+      <td class="nw"><span class="tag">${esc(kinds[p.kind]||p.kind)}</span></td>
+      <td class="mono nw">${esc(p.version||'')}</td>
+      <td class="wrap" style="color:var(--muted)">${esc(p.description||'')}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="color:var(--faint)">无插件</td></tr>';
+    const meters = (r.billing||{}).meters || [];
+    $('pfBillSub').textContent = (r.billing||{}).enforce ? '配额强制拦截已开启' : '默认只记账；billing.enforce 才拦截';
+    $('pfMeters').innerHTML = meters.map(m=>`
+      <tr><td class="mono">${esc(m.meter)}</td><td class="mono nw">${esc(m.used)}</td>
+      <td class="mono nw">${esc(m.quota)}</td><td class="mono nw">${esc(m.remaining)}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="color:var(--faint)">暂无计量</td></tr>';
+  }catch(e){ $('pfPlugins').innerHTML = `<tr><td colspan="4">${esc(e.message)}</td></tr>`; }
+}
 function schedule(){ setTimeout(async ()=>{ if(!document.hidden) await load(); schedule(); }, pollMs); }
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
 
@@ -874,6 +1085,9 @@ function setupLazy(){
   lazyLoad('sec-evolve', evoLoad);
   lazyLoad('sec-eco', ecoLoad);
   lazyLoad('sec-assets', asLoad);
+  lazyLoad('sec-agents', agLoad);
+  lazyLoad('sec-platform', pfLoad);
+  lazyLoad('sec-ops', opsLoad);
 }
 // 兜底：总览异常时也保证面板可加载
 setTimeout(setupLazy, 3500);

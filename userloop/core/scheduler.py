@@ -189,6 +189,13 @@ async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
     """按租户遍历执行调度任务（每租户独立数据，互不影响；单租户失败不阻塞其他）。"""
     from userloop.core.tenants import DEFAULT_TENANT, TenantStores, tenant_config
 
+    _t0 = _utcnow()
+    # 全局任务（不按租户）：备份覆盖整个 data_dir，告警基于进程指标
+    if job in ("backup", "alerts"):
+        try:
+            return await _run_global(ctx, job)
+        finally:
+            _observe_job(job, _t0, True)
     out: dict[str, Any] = {}
     try:
         tenants = TenantStores(ctx.config)
@@ -239,20 +246,65 @@ async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
                 out[tid] = {"verified": len(await mflow_publish.verify_due_publications(st))}
             elif job == "evolve_daily":
                 from userloop.evolve import engine as evo
+                from userloop.integrations import probe as probe_mod
 
                 tel = await evo.collect_telemetry(st, tctx)
+                pr = await probe_mod.run(tctx)
                 dg = await evo.diagnose(st, tctx)
                 out[tid] = {"identified_rate": tel["identified_rate"],
-                            "issues": dg["counts"], "ok": dg["ok"]}
+                            "issues": dg["counts"], "ok": dg["ok"],
+                            "probes": pr.get("counts")}
+            elif job == "probe":
+                from userloop.integrations import probe as probe_mod
+
+                out[tid] = await probe_mod.run(tctx)
             elif job == "evolve_propose":
                 from userloop.evolve import engine as evo
 
                 r = await evo.propose(st, tctx)
                 out[tid] = {"proposals": r.get("count", 0), "ok": r.get("ok")}
+            elif job == "agents":
+                from userloop.agents import engine as agents
+
+                out[tid] = {"ran": len(await agents.run_ready_all(st, tctx))}
         except Exception as exc:  # noqa: BLE001
             out[tid] = {"error": str(exc)[:160]}
     await tenants.close_all()
+    _observe_job(job, _t0, True)
     return out
+
+
+async def _run_global(ctx: ExecutorContext, job: str) -> dict:
+    """全局任务：备份（整个 data_dir）/ 告警（进程指标 + 默认租户健康）。"""
+    if job == "backup":
+        from userloop.ops import backup as backup_mod
+
+        ops = ctx.config.get("ops") or {}
+        keep = int(((ops.get("backup") or {}).get("keep")) or 7)
+        return backup_mod.create(ctx.config["data_dir"], keep=keep, note="scheduled", cfg=ctx.config)
+
+    from userloop.core.tenants import DEFAULT_TENANT, TenantStores
+    from userloop.ops import alerts as alerts_mod
+    from userloop.ops import health as health_mod
+
+    tenants = TenantStores(ctx.config)
+    try:
+        store = await tenants.get(DEFAULT_TENANT)
+        h = await health_mod.check(ctx.config, store)
+    finally:
+        await tenants.close_all()
+    return await alerts_mod.run(ctx.config, h)
+
+
+def _observe_job(job: str, t0: datetime, ok: bool) -> None:
+    try:
+        from userloop.ops.metrics import METRICS
+
+        METRICS.inc("userloop_scheduler_job_runs_total", {"job": job, "result": "ok" if ok else "error"})
+        METRICS.observe_ms("userloop_scheduler_job_duration_ms", (_utcnow() - t0).total_seconds() * 1000,
+                           {"job": job})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def build_scheduler(store: Store, ctx: ExecutorContext):
@@ -292,4 +344,14 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
                   args=[ctx, "evolve_daily"], id="evolve_daily", max_instances=1, coalesce=True)
     sched.add_job(run_all_tenants, CronTrigger(day_of_week="mon", hour=2, minute=30, timezone="UTC"),
                   args=[ctx, "evolve_propose"], id="evolve_propose", max_instances=1, coalesce=True)
+    # 契约探测：每 6 小时；每日 evolve 也会再跑一轮
+    sched.add_job(run_all_tenants, "interval", hours=6, args=[ctx, "probe"], id="contract_probe",
+                  max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, "interval", minutes=5, args=[ctx, "agents"], id="agent_campaigns",
+                  max_instances=1, coalesce=True)
+    # 运维加固（N3）：每日 03:00 UTC 备份（全局）；每 10 分钟评估告警
+    sched.add_job(run_all_tenants, CronTrigger(hour=3, minute=0, timezone="UTC"),
+                  args=[ctx, "backup"], id="backup", max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, "interval", minutes=10, args=[ctx, "alerts"], id="alerts",
+                  max_instances=1, coalesce=True)
     return sched

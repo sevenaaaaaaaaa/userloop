@@ -43,7 +43,7 @@ Identity 身份图谱 → Content 渲染 → Delivery 投递 → Feedback 回执
 ### 1) Identity 身份图谱（前置条件）
 跨渠道触达必须知道"这个邮箱/手机/openid 是不是同一个人"。
 新增表 `identities(user_id, type, value, verified, source)`，type ∈
-`email | phone | wechat_openid | wechat_unionid | wecom_userid | websflow_visitor`。
+`email | phone | wechat_openid | wechat_unionid | wecom_userid | websflow_visitor | openflow_member | openflow_visitor | mflow_item`。
 - 写入时机：埋点带 email/phone、微信回调（openid→unionid）、表单提交、WebsFlow 回流传参
 - 解析服务：`resolve(user_id, type)` / `merge(user_a, user_b)`
 

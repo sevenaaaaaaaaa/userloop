@@ -20,6 +20,26 @@ from userloop.core.store import Store, iso_now, new_id
 DEFAULT_WINDOW_DAYS = 14
 
 
+async def link_topic_identity(store: Store, payload: dict[str, Any], item_id: str) -> dict[str, Any]:
+    """发布回流时按 mflow_item 认回选题所属用户（创建时已绑定；幂等再绑一次）。
+
+    只认命名空间字段（userloop_email / mflow_item），不把 MFlow 作者邮箱当成旅程用户。
+    """
+    uid = await store.resolve_identity("mflow_item", item_id)
+    email = str(payload.get("userloop_email") or "").strip()
+    did = str(payload.get("userloop_distinct_id") or "").strip()
+    if not uid and email:
+        uid = await store.resolve_identity("email", email)
+    if not uid and did:
+        found = await store.find_user(did)
+        uid = found["id"] if found else None
+    if uid:
+        await store.bind_identity(uid, "mflow_item", item_id, source="mflow.publish")
+        if email:
+            await store.bind_identity(uid, "email", email, source="mflow.publish")
+    return {"user_id": uid, "bound": bool(uid), "item_id": item_id}
+
+
 def _parse(ts: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).replace(tzinfo=None)
@@ -44,7 +64,10 @@ async def record_publish(store: Store, payload: dict[str, Any],
         .isoformat(timespec="seconds") + "Z",
     }
     row = await store.record_publication(pub)
-    return {"ok": True, "publication": row}
+    identity = await link_topic_identity(store, payload, item_id)
+    if identity.get("user_id"):
+        row = {**row, "user_id": identity["user_id"]}
+    return {"ok": True, "publication": row, "identity": identity}
 
 
 async def verify_due_publications(store: Store, limit: int = 50) -> list[dict]:

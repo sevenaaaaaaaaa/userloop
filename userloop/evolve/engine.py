@@ -214,6 +214,25 @@ async def diagnose(store: Store, ctx: ExecutorContext) -> dict[str, Any]:
                 {"hint": "样本不足时会自动回退规则版"},
                 "数据积累后系统会自动训练；也可在预测面板点「训练/更新模型」")
 
+    # 9) 契约探测：家族 API 断链
+    from userloop.integrations import probe as probe_mod
+
+    snap = probe_mod.load_latest(ctx)
+    if snap:
+        down = [r for r in (snap.get("results") or []) if r.get("status") == "down"]
+        if down:
+            add("high", "contract_broken", "生态链路断链",
+                [{"id": r.get("id"), "http": r.get("http"), "error": r.get("error")} for r in down],
+                "检查对方服务与凭据；同机互调应走 127.0.0.1，勿走公网域名")
+        try:
+            age_h = (now - datetime.fromisoformat(str(snap.get("at", "")).replace("Z", "+00:00"))
+                     .replace(tzinfo=None)).total_seconds() / 3600
+            if age_h > 36:
+                add("low", "probe_stale", "契约探测超过 36 小时未跑",
+                    {"last": snap.get("at")}, "确认调度器在运行，或在控制台点「立即探测」")
+        except (TypeError, ValueError):
+            pass
+
     high = [i for i in issues if i["severity"] == "high"]
     return {"at": iso_now(), "tenant": cfg.get("tenant") or "main", "ok": not high,
             "issues": issues, "counts": {"high": len(high),

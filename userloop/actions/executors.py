@@ -124,6 +124,12 @@ async def _execute_action(
         result = await ma.execute(ctx, action, loop, user)
         ctx.write_outbox({**record, **result})
         return result
+    if atype.startswith("plugin."):
+        from userloop.plugins import registry as plug
+
+        result = await plug.execute_action(ctx, action, loop, user)
+        ctx.write_outbox({**record, **result})
+        return result
     if atype.startswith("touch."):
         from userloop.touch import dispatch
 
@@ -280,6 +286,15 @@ async def execute_action(
 
     result = await _execute_action(ctx, action, loop, user)
     rec_channel = str(result.get("channel") or channel)     # auto → 用解析后的真实渠道记账
+    try:
+        from userloop.ops.metrics import METRICS
+
+        outcome = ("ok" if result.get("ok") else
+                   "blocked" if (result.get("blocked_by_frequency") or result.get("blocked_by_suppression")) else
+                   "deferred" if result.get("deferred_by_sto") else "failed")
+        METRICS.inc("userloop_actions_total", {"type": atype, "channel": rec_channel, "result": outcome})
+    except Exception:  # noqa: BLE001 —— 指标失败绝不影响触达
+        pass
     if (result.get("ok") and not result.get("dry_run") and rec_channel in _freq.MARKETING_CHANNELS
             and not _freq._is_transactional(loop.get("template_id"), _freq.cfg_of(ctx))):
         # 事务类消息不占营销配额（收据/验证码等）
@@ -298,4 +313,11 @@ async def execute_action(
                 })
         except Exception:  # noqa: BLE001 —— 台账/回执失败不影响投递结果
             pass
+        if store is not None:
+            try:
+                from userloop.billing import meter as billing
+
+                await billing.record(store, "touches")
+            except Exception:  # noqa: BLE001
+                pass
     return result

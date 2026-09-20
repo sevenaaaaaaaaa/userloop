@@ -80,7 +80,7 @@ def serve(data_dir: str | None, host: str | None, port: int | None) -> None:
 @main.command()
 @click.option("--data-dir", default=None)
 def mcp(data_dir: str | None) -> None:
-    """启动 MCP Server（stdio，只读）：供 OpenFlow AgentRuntime / Claude 等消费旅程数据."""
+    """启动 MCP Server（stdio）：只读旅程 + 写操作走审批门。"""
     import os
 
     from userloop.config import load_config
@@ -257,6 +257,137 @@ def copilot(prompt: str, data_dir: str | None, do_apply: bool, enable: bool) -> 
     asyncio.run(_run())
 
 
+@main.group()
+def ops() -> None:
+    """运维加固：健康检查 / 指标 / 备份恢复 / 告警。"""
+
+
+async def _with_store(data_dir: str | None):
+    from userloop.core.store import Store
+
+    cfg = load_config(data_dir)
+    store = Store(cfg["db_path"], cfg)
+    await store.connect()
+    return cfg, store
+
+
+@ops.command("health")
+@click.option("--data-dir", default=None)
+def ops_health(data_dir: str | None) -> None:
+    """健康检查（存储/事件后端/入库新鲜度/磁盘/调度器）。"""
+
+    async def _run() -> None:
+        from userloop.ops import health as health_mod
+
+        cfg, store = await _with_store(data_dir)
+        try:
+            console.print_json(json.dumps(await health_mod.check(cfg, store), ensure_ascii=False, default=str))
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@ops.command("metrics")
+@click.option("--data-dir", default=None)
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（默认 Prometheus 文本）")
+def ops_metrics(data_dir: str | None, as_json: bool) -> None:
+    """导出进程指标（Prometheus 文本 / JSON）。"""
+    from userloop.ops.metrics import METRICS
+
+    if as_json:
+        console.print_json(json.dumps(METRICS.snapshot(), ensure_ascii=False))
+    else:
+        console.print(METRICS.render_prom(), end="", soft_wrap=True)
+
+
+@ops.command("backup")
+@click.option("--data-dir", default=None)
+@click.option("--keep", default=7, help="保留最近 N 份")
+@click.option("--note", default="cli", help="备注")
+def ops_backup(data_dir: str | None, keep: int, note: str) -> None:
+    """创建备份（SQLite 一致性快照 + tar.gz + 保留策略）。"""
+    from userloop.config import load_config as _lc
+    from userloop.ops import backup as backup_mod
+
+    cfg = _lc(data_dir)
+    out = backup_mod.create(cfg["data_dir"], keep=keep, note=note, cfg=cfg)
+    console.print_json(json.dumps(out, ensure_ascii=False, default=str))
+
+
+@ops.command("backups")
+@click.option("--data-dir", default=None)
+def ops_backups(data_dir: str | None) -> None:
+    """列出已有备份。"""
+    from userloop.config import load_config as _lc
+    from userloop.ops import backup as backup_mod
+
+    cfg = _lc(data_dir)
+    items = backup_mod.list_backups(cfg["data_dir"])
+    table = Table(title=f"备份（{len(items)} 份）")
+    table.add_column("文件")
+    table.add_column("大小 MB", justify="right")
+    table.add_column("创建时间")
+    for it in items:
+        table.add_row(it["name"], f"{it['bytes'] / 1e6:.2f}", it["created_at"])
+    console.print(table)
+
+
+@ops.command("verify")
+@click.argument("name")
+@click.option("--data-dir", default=None)
+def ops_verify(name: str, data_dir: str | None) -> None:
+    """校验备份归档完整性（NAME 为备份文件名）。"""
+    import os as _os
+
+    from userloop.config import load_config as _lc
+    from userloop.ops import backup as backup_mod
+
+    cfg = _lc(data_dir)
+    path = _os.path.join(cfg["data_dir"], backup_mod.BACKUP_DIR, _os.path.basename(name))
+    console.print_json(json.dumps(backup_mod.verify(path), ensure_ascii=False, default=str))
+
+
+@ops.command("restore")
+@click.argument("name")
+@click.option("--data-dir", default=None)
+@click.option("--force", is_flag=True, help="确认覆盖当前数据（恢复后需重启服务）")
+def ops_restore(name: str, data_dir: str | None, force: bool) -> None:
+    """从备份恢复（会覆盖当前数据目录，恢复后需重启服务）。"""
+    import os as _os
+
+    from userloop.config import load_config as _lc
+    from userloop.ops import backup as backup_mod
+
+    cfg = _lc(data_dir)
+    path = _os.path.join(cfg["data_dir"], backup_mod.BACKUP_DIR, _os.path.basename(name))
+    out = backup_mod.restore(path, cfg["data_dir"], force=force)
+    console.print_json(json.dumps(out, ensure_ascii=False, default=str))
+
+
+@ops.command("alerts")
+@click.option("--data-dir", default=None)
+@click.option("--run", "do_run", is_flag=True, help="评估并按冷却窗口外送")
+def ops_alerts(data_dir: str | None, do_run: bool) -> None:
+    """评估运维告警（--run 则触发外送并记录）。"""
+
+    async def _run() -> None:
+        from userloop.ops import alerts as alerts_mod
+        from userloop.ops import health as health_mod
+
+        cfg, store = await _with_store(data_dir)
+        try:
+            h = await health_mod.check(cfg, store)
+            if do_run:
+                console.print_json(json.dumps(await alerts_mod.run(cfg, h), ensure_ascii=False, default=str))
+            else:
+                console.print_json(json.dumps(alerts_mod.evaluate(cfg, h), ensure_ascii=False, default=str))
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.option("--data-dir", default=None)
 @click.option("--days", default=7, help="统计窗口天数")
@@ -312,6 +443,23 @@ def evolve_status(data_dir: str | None) -> None:
             console.print_json(json.dumps({"telemetry": tel, "diagnostics": dg}, ensure_ascii=False))
         finally:
             await store.close()
+
+    asyncio.run(_run())
+
+
+@evolve.command("probe")
+@click.option("--data-dir", default=None)
+def evolve_probe(data_dir: str | None) -> None:
+    """立即探测家族系统契约（OpenFlow/MFlow/WebsFlow/inFlow）。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.integrations import probe as probe_mod
+
+        cfg = load_config(data_dir)
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        snap = await probe_mod.run(ctx)
+        console.print_json(json.dumps(snap, ensure_ascii=False))
 
     asyncio.run(_run())
 
@@ -555,6 +703,150 @@ def _make_demo_events(users: int) -> list[dict[str, Any]]:
                 "ts": (t0 + dt).isoformat(timespec="seconds") + "Z",
             })
     return out
+
+
+@main.group()
+def agents() -> None:
+    """N3 智能体运营团队：拆解目标 / 审批 / 执行。"""
+
+
+@agents.command("plan")
+@click.argument("goal")
+def agents_plan(goal: str) -> None:
+    """只拆解、不落库：看角色任务与是否需要审批。"""
+    from userloop.agents import planner
+
+    p = planner.plan(goal)
+    console.print(f"[bold]{p['name']}[/]  recipe={p['recipe']}  验收 {p['metric']} +{int(p['target']*100)}%")
+    console.print("需要审批：" + ("是（含中风险任务，人只点批准）" if p["needs_approval"] else "否"))
+    table = Table(title="任务")
+    table.add_column("#", justify="right")
+    table.add_column("角色")
+    table.add_column("工具")
+    table.add_column("风险")
+    table.add_column("标题")
+    for t in p["tasks"]:
+        table.add_row(str(t["seq"]), t["role_name"], t["tool"], t["risk"], t["title"])
+    console.print(table)
+
+
+@agents.command("create")
+@click.argument("goal")
+@click.option("--data-dir", default=None)
+@click.option("--approve", "do_approve", is_flag=True, help="创建后立即批准（演示用）")
+def agents_create(goal: str, data_dir: str | None, do_approve: bool) -> None:
+    """拆解目标为战役；中风险任务待人审。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.agents import engine as agents
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
+        try:
+            out = await agents.create_campaign(store, ctx, goal)
+            camp = out["campaign"]
+            console.print(f"战役 {camp['id']}  状态={camp['status']}  需要审批={out['needs_approval']}")
+            for t in out["tasks"]:
+                console.print(f"  [{t['status']}] {t['role']} / {t['tool']}  {t['title']}")
+            if do_approve:
+                ap = await agents.approve_campaign(store, ctx, camp["id"])
+                console.print(f"已批准 → {ap.get('campaign', {}).get('status')}")
+                snap = await agents.snapshot(store, camp["id"])
+                for t in snap.get("tasks") or []:
+                    console.print(f"  [{t['status']}] {t['role']} / {t['tool']}  {t['title']}")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@agents.command("approve")
+@click.argument("campaign_id")
+@click.option("--data-dir", default=None)
+def agents_approve(campaign_id: str, data_dir: str | None) -> None:
+    """批准战役（状态机执行白名单任务）。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.agents import engine as agents
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        ctx.store = store
+        try:
+            console.print_json(json.dumps(await agents.approve_campaign(store, ctx, campaign_id),
+                                          ensure_ascii=False, default=str))
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@agents.command("list")
+@click.option("--data-dir", default=None)
+def agents_list(data_dir: str | None) -> None:
+    """列出战役。"""
+
+    async def _run() -> None:
+        from userloop.core.store import Store
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        try:
+            rows = await store.list_campaigns(limit=30)
+            if not rows:
+                console.print("（暂无战役。试：userloop agents create \"本月复购率 +10%\"）")
+                return
+            table = Table(title="Agent 战役")
+            table.add_column("id")
+            table.add_column("目标")
+            table.add_column("状态")
+            table.add_column("配方")
+            for r in rows:
+                table.add_row(r["id"], r["goal"][:40], r["status"], str((r.get("plan") or {}).get("recipe") or ""))
+            console.print(table)
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+
+@main.command()
+@click.option("--data-dir", default=None)
+def platform(data_dir: str | None) -> None:
+    """N4 平台摘要：插件 / 用量 / OpenAPI。"""
+
+    async def _run() -> None:
+        from userloop.actions.executors import ExecutorContext
+        from userloop.billing import meter as billing
+        from userloop.core.store import Store
+        from userloop.plugins import registry as plug
+
+        cfg = load_config(data_dir)
+        store = Store(cfg["db_path"], cfg)
+        await store.connect()
+        ctx = ExecutorContext(cfg["data_dir"], cfg)
+        try:
+            plugins = plug.list_plugins(cfg)
+            kinds: dict[str, int] = {}
+            for p in plugins:
+                kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1
+            console.print(f"插件 {len(plugins)} 个  " + "  ".join(f"{k}={v}" for k, v in kinds.items()))
+            console.print_json(json.dumps(await billing.snapshot(store, ctx), ensure_ascii=False))
+            console.print("OpenAPI: /api/v1/openapi.json   Docs: /api/docs   MCP: userloop mcp")
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

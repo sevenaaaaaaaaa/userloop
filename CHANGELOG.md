@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## 0.6.0 — 运维加固（N3，2026-09-18）
+
+**健康**：`GET /api/v1/health` 深度检查（存储/事件后端/入库新鲜度/磁盘/调度器/多租户）+ `userloop ops health`。
+**指标**：内置进程指标注册表 + 中间件，`GET /api/v1/metrics`（Prometheus 文本 / JSON）——
+请求计数与时延直方图、入库/生成 Loop/动作/调度任务；路径按路由模板归一防标签爆炸。
+**告警**：确定性规则（存储/事件后端/调度器/入库停滞/磁盘/5xx 率）+ 冷却去重 + 可选 webhook 外送，
+状态与历史落盘（`data/ops/`）；每 10 分钟自动评估。
+**备份**：`VACUUM INTO` 一致性快照 + tar.gz + manifest + 保留策略 + 校验 + 可回滚恢复；
+每日 03:00 UTC 自动备份；CLI `userloop ops backup|backups|verify|restore`。
+**控制台**：新增「运维健康」面板（检查项/当前告警/备份列表 + 立即备份/校验）。
+**压测**：`deploy/loadtest.py`（ingest/overview 并发压测，RPS + p50/p95/p99）。
+**文档**：`docs/OPS.md`。
+
+## Unreleased — N3 Agent 团队 + N4 平台化（及 N1 收尾）
+
+**N3**：角色化 Agent（分析/内容/触达/客服）+ 确定性配方拆解目标。`本月复购率 +10%` 落库为战役：低风险先跑，中风险等人审；批准后起草停用态 Loop，不直接对外触达。
+**N4**：插件市场四类（source/action/model/template）；OpenAPI `/api/v1/openapi.json` + `/api/docs`；MCP 写工具只走审批状态机；租户用量台账，`billing.enforce` 才拦截。
+**N1 收尾**：MFlow `mflow_item` 选题身份；主站 `track.js` 顺表单 identify；Hub 抬嵌套邮箱；契约探测 + 控制台面板。
+
 ## 0.5.3 — 控制台输出转义收口（2026-09-18）
 
 **安全**：控制台（index/canvas）所有外部数据渲染经 `esc()`；内联事件参数经 `jsArg()`

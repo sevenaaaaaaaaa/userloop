@@ -24,6 +24,9 @@ def test_normalize_batch() -> None:
     assert out[0]["props"]["session_id"] == "s1"
     assert out[1]["email"] == "a@x.com"
     assert out[1]["source"] == "web"
+    ident = normalize_batch({"events": [
+        {"distinct_id": "a", "event": "identify", "props": {"email": "i@x.com"}}]})
+    assert ident[0]["email"] == "i@x.com"
 
 
 def test_normalize_rejects_bad_shape() -> None:
@@ -36,6 +39,8 @@ def test_snippet_embeds_endpoint() -> None:
     assert "/api/v1/track" in js
     assert "page_view" in js
     assert "sendBeacon" in js
+    assert "form_submit" in js and "identify" in js
+    assert "preventDefault" not in js
     # 合法 JS 冒烟：大括号配对
     assert js.count("{") == js.count("}")
 
