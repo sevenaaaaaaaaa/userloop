@@ -53,6 +53,9 @@ def create_app(data_dir: str | None = None) -> Any:
     authed_mode = auth_enabled(cfg["data_dir"])
     # 聚合看板缓存（10s TTL）：多标签页/多管理员不重复打库（对齐 OpenFlow 性能教训）
     overview_cache: dict[str, Any] = {"ts": 0.0, "stamp": None, "data": None}
+    import asyncio as _asyncio
+
+    overview_lock = _asyncio.Lock()      # 缓存击穿保护：并发 miss 只重建一次
     web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
     from userloop.integrations.probe import capabilities as _caps
 
@@ -391,14 +394,20 @@ def create_app(data_dir: str | None = None) -> Any:
         import time
 
         now = time.monotonic()
-        if refresh or overview_cache["data"] is None or (now - overview_cache["ts"]) > 10:
-            data, version = await _build_overview()
-            overview_cache.update(ts=now, stamp=version, data=data)
+        stale = refresh or overview_cache["data"] is None or (now - overview_cache["ts"]) > 10
+        if stale:
+            # 缓存击穿保护：并发 miss 时只让一个请求重建，其余等待复用结果
+            async with overview_lock:
+                now = time.monotonic()
+                if (refresh or overview_cache["data"] is None
+                        or (now - overview_cache["ts"]) > 10):
+                    data, version = await _build_overview()
+                    overview_cache.update(ts=now, stamp=version, data=data)
         return JSONResponse({
             "me": _user(request) or {},
             "overview": overview_cache["data"],
             "stamp": overview_cache["stamp"],
-            "cached_for": round(now - overview_cache["ts"], 1),
+            "cached_for": round(time.monotonic() - overview_cache["ts"], 1),
         })
 
     @app.get(f"{prefix}/api/v1/heartbeat")
