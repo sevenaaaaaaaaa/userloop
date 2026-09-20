@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.6.1 — 备份修复（2026-09-18）
+
+**修复**：① 备份排除 SQLite 边车文件（`-wal/-shm/-journal`）——它们属原库，入包会在恢复时
+污染 VACUUM 快照；② `VACUUM INTO` 改用普通读写连接（只读连接遇到 WAL 会报
+"attempt to write a readonly database"）；③ manifest 事件后端识别与健康检查同源
+（`storage.events`），MySQL 事件库会明确标注需另行 mysqldump。新增活库 WAL 场景测试。
+
 ## 0.6.0 — 运维加固（N3，2026-09-18）
 
 **健康**：`GET /api/v1/health` 深度检查（存储/事件后端/入库新鲜度/磁盘/调度器/多租户）+ `userloop ops health`。

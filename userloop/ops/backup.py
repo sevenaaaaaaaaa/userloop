@@ -23,6 +23,8 @@ from typing import Any
 BACKUP_DIR = "backups"
 _EXCLUDE_DIRS = {BACKUP_DIR}
 _DB_SUFFIX = (".db", ".sqlite", ".sqlite3")
+# SQLite 边车文件不能进备份：它们属于「原库」而非 VACUUM 快照，恢复时会污染快照
+_SIDECAR_SUFFIX = ("-wal", "-shm", "-journal")
 
 
 def _ts() -> str:
@@ -42,18 +44,35 @@ def _db_files(data_dir: str) -> list[str]:
 
 
 def _vacuum_within(src: str, dst: str) -> None:
-    """用 VACUUM INTO 生成一致副本（目标必须不存在）。"""
+    """用 VACUUM INTO 生成一致副本（目标必须不存在）。
+
+    用**普通读写连接**而非 `mode=ro`：活库存在 `-wal` 时，只读连接无法完成 WAL 恢复，
+    会报 "attempt to write a readonly database"。VACUUM INTO 不修改源库内容，
+    读写连接只是允许 SQLite 正常恢复/检查点 WAL。
+    """
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if os.path.exists(dst):
         os.remove(dst)
-    con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    con = sqlite3.connect(src, timeout=15)
     try:
+        con.execute("PRAGMA busy_timeout=15000")
         con.execute("VACUUM INTO ?", (dst,))
     finally:
         con.close()
 
 
-def create(data_dir: str, keep: int = 7, note: str = "", cfg: dict | None = None) -> dict[str, Any]:
+def events_backend_of(cfg: dict | None) -> str:
+    """识别事件后端（与 store.build_event_store 同源：storage.events）。"""
+    storage = ((cfg or {}).get("storage") or {}).get("events") or {}
+    backend = str(storage.get("backend") or "auto").lower()
+    mysql = storage.get("mysql") or {}
+    if backend == "mysql" or (backend == "auto" and mysql.get("enabled")):
+        return "mysql" if mysql.get("enabled") else "sqlite"
+    return "sqlite"
+
+
+def create(data_dir: str, keep: int = 7, note: str = "", cfg: dict | None = None,
+           events_backend: str | None = None) -> dict[str, Any]:
     """创建备份：`<data_dir>/backups/backup-<ts>.tar.gz`。返回路径与元数据。"""
     if not os.path.isdir(data_dir):
         return {"ok": False, "error": f"数据目录不存在：{data_dir}"}
@@ -84,15 +103,18 @@ def create(data_dir: str, keep: int = 7, note: str = "", cfg: dict | None = None
                 rel = os.path.relpath(src, data_dir)
                 if src in dbs or rel.startswith(BACKUP_DIR + os.sep):
                     continue
+                if f.endswith(_SIDECAR_SUFFIX):
+                    continue          # -wal/-shm/-journal 属于原库，不进快照
                 dst = os.path.join(stage, rel)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(src, dst)
                 members.append(rel)
-        events = cfg.get("events") or {}
+        backend = events_backend or events_backend_of(cfg)
         manifest = {"version": _manifest_version(), "created_at": datetime.utcnow().isoformat() + "Z",
                     "note": note, "data_dir": data_dir, "files": sorted(members),
-                    "dbs": db_info, "events_backend": events.get("backend") or "sqlite",
-                    "events_note": "事件表在外部 MySQL 时需另行 mysqldump" if (events.get("backend") == "mysql") else ""}
+                    "dbs": db_info, "events_backend": backend,
+                    "events_note": ("事件表在外部 MySQL，本 SQLite 快照不含 events；请另行 mysqldump"
+                                    if backend == "mysql" else "")}
         with open(os.path.join(stage, "BACKUP-MANIFEST.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
         archive = _unique_path(out_dir, f"backup-{stamp}")

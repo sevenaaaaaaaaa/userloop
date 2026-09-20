@@ -252,3 +252,12 @@ Hub 归一化同样顺着已有字段抬邮箱（Shopify `customer.email` / Segm
 （`quantity=1, amount=None`）。选后者——改动面最小、不影响任何现有调用方，
 也避免与并行工作的代码产生冲突。**判断准则：修复放在「被多处调用的那个函数」里**。
 
+## L29 SQLite 备份的两个隐藏坑：边车文件与只读连接
+
+`VACUUM INTO` 生成的是**独立无 WAL** 的库；若把原库的 `-wal/-shm/-journal` 一起打进备份，
+恢复后 SQLite 可能把这些**属于旧镜像**的 WAL 重放到新快照上 → 数据错乱。必须显式排除边车文件。
+另一个坑：对存在 WAL 的活库用 `mode=ro` 连接执行 `VACUUM INTO` 会失败
+（只读连接无法完成 WAL 恢复，报 "attempt to write a readonly database"）——用普通读写连接即可，
+VACUUM INTO 本身不修改源库。**测试要用「开着 WAL 连接的活库」而不是造假的边车文件**，
+否则测不出真实行为。
+

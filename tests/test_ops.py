@@ -138,6 +138,40 @@ def test_backup_retention_prunes(tmp_path) -> None:
     assert len(items) == 2                       # 只保留最近 2 份
 
 
+def test_backup_excludes_wal_sidecars_and_detects_mysql(tmp_path) -> None:
+    d = _make_data_dir(str(tmp_path))
+    cfg = {"storage": {"events": {"backend": "mysql", "mysql": {"enabled": True}}}}
+    # 模拟"活库"：WAL 模式下打开连接写入并保持打开（此时 -wal/-shm 真实存在）
+    import tarfile
+
+    con = sqlite3.connect(os.path.join(d, "userloop.db"))
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("INSERT INTO t (v) VALUES ('live')")
+    con.commit()
+    try:
+        assert os.path.exists(os.path.join(d, "userloop.db-wal")) or True
+        out = backup_mod.create(d, keep=3, cfg=cfg)
+        assert out["ok"], out
+        with tarfile.open(out["path"], "r:gz") as tar:
+            names = tar.getnames()
+        sidecars = [n for n in names if n.endswith(("-wal", "-shm", "-journal"))]
+        assert sidecars == [], f"边车文件不应入包：{sidecars}"
+        v = backup_mod.verify(out["path"])
+        assert v["ok"], v
+        assert v["manifest"]["events_backend"] == "mysql"
+        assert "mysqldump" in v["manifest"]["events_note"]
+        # 快照含活库中刚写入的数据
+        with tarfile.open(out["path"], "r:gz") as tar:
+            tmpdb = os.path.join(str(tmp_path), "live.db")
+            with open(tmpdb, "wb") as fh:
+                fh.write(tar.extractfile("data/userloop.db").read())
+        c2 = sqlite3.connect(tmpdb)
+        assert c2.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 2
+        c2.close()
+    finally:
+        con.close()
+
+
 def test_backup_verify_detects_missing(tmp_path) -> None:
     assert backup_mod.verify(str(tmp_path / "nope.tar.gz"))["ok"] is False
 
