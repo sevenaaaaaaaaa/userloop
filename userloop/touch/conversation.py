@@ -52,12 +52,11 @@ async def handle_inbound(store: Store, ctx: ExecutorContext, payload: dict[str, 
     user = await store.find_user(did) or await store.upsert_user(
         did, email=payload.get("email"),
         props={k: v for k, v in payload.items() if k in ("phone", "openid", "unionid", "wecom_userid")})
-    if payload.get("email"):
-        await store.bind_identity(user["id"], "email", str(payload["email"]), source="conversation")
-    if payload.get("phone"):
-        await store.bind_identity(user["id"], "phone", str(payload["phone"]), source="conversation")
-    if payload.get("openid"):
-        await store.bind_identity(user["id"], "wechat_openid", str(payload["openid"]), source="conversation")
+    from userloop.touch.identity import bind_or_merge
+
+    for field, type_ in (("email", "email"), ("phone", "phone"), ("openid", "wechat_openid")):
+        if payload.get(field):
+            user, _ = await bind_or_merge(store, user, type_, str(payload[field]), source="conversation")
 
     # 2) 存用户消息 + 取历史（连续对话的关键）
     await store.add_message(user["id"], channel, "user", text, payload.get("ts"))

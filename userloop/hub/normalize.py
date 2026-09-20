@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from userloop.touch.identity import lift_contacts
+
 SOURCE_TYPES = ("segment", "ga4", "shopify", "hubspot", "generic")
 
 # 电商状态 → 旅程事件
@@ -70,16 +72,22 @@ def _identity(d: dict, *keys: str) -> str | None:
 def _norm_segment(payload: dict) -> list[dict]:
     did = payload.get("userId") or payload.get("anonymous_id") or payload.get("anonymousId")
     props = dict(payload.get("properties") or {})
-    email = payload.get("email") or payload.get("context", {}).get("traits", {}).get("email")
+    lifted = lift_contacts(payload, props, payload.get("context"))
+    email = lifted.get("email")
+    if email:
+        props.setdefault("email", email)
     return [{"distinct_id": did, "event": payload.get("event"), "props": props, "email": email}]
 
 
 def _norm_ga4(payload: dict) -> list[dict]:
     out = []
     did = payload.get("client_id") or payload.get("clientId") or payload.get("user_id")
-    email = payload.get("user_email")
+    lifted = lift_contacts(payload, payload.get("user_properties"))
+    email = lifted.get("email") or payload.get("user_email")
     for ev in payload.get("events") or []:
         params = dict(ev.get("params") or {})
+        if email:
+            params.setdefault("email", email)
         out.append({"distinct_id": did, "event": ev.get("name"), "props": params, "email": email})
     return out
 
@@ -87,7 +95,8 @@ def _norm_ga4(payload: dict) -> list[dict]:
 def _norm_shopify(payload: dict) -> list[dict]:
     """订单 webhook → purchase/refund（旅程关键事件）。"""
     status = (payload.get("financial_status") or "").lower()
-    email = payload.get("email") or (payload.get("customer") or {}).get("email")
+    lifted = lift_contacts(payload, payload.get("customer"), payload.get("billing_address"))
+    email = lifted.get("email")
     event = _SHOP_STATUS_MAP.get(status)
     if not event:
         return []
@@ -98,8 +107,12 @@ def _norm_shopify(payload: dict) -> list[dict]:
         "items": [{"title": i.get("title"), "qty": i.get("quantity"),
                    "price": i.get("price")} for i in (payload.get("line_items") or [])][:10],
     }
+    if email:
+        props["email"] = email
+    if lifted.get("phone"):
+        props["phone"] = lifted["phone"]
     did = payload.get("distinct_id") or email
-    return [{"distinct_id": did, "event": event, "props": props}]
+    return [{"distinct_id": did, "event": event, "props": props, "email": email}]
 
 
 def _norm_hubspot(payload: Any) -> list[dict]:
@@ -120,16 +133,24 @@ def _norm_hubspot(payload: Any) -> list[dict]:
 
 def _norm_cn(payload: dict) -> list[dict]:
     """神策/GrowingIO 风格 {distinct_id, event, properties}。"""
+    props = dict(payload.get("properties") or {})
+    lifted = lift_contacts(payload, props)
+    if lifted.get("email"):
+        props.setdefault("email", lifted["email"])
     return [{"distinct_id": payload.get("distinct_id"), "event": payload.get("event"),
-             "props": dict(payload.get("properties") or {})}]
+             "props": props, "email": lifted.get("email")}]
 
 
 def _norm_generic(payload: dict) -> list[dict]:
+    props = dict(payload.get("props") or payload.get("properties") or {})
+    lifted = lift_contacts(payload, props)
+    email = lifted.get("email") or payload.get("email")
+    if email:
+        props.setdefault("email", email)
     did = payload.get("distinct_id") or payload.get("user_id") or payload.get("anonymous_id") \
-          or payload.get("email")
+          or email
     return [{"distinct_id": did, "event": payload.get("event"),
-             "props": dict(payload.get("props") or payload.get("properties") or {}),
-             "email": payload.get("email")}]
+             "props": props, "email": email}]
 
 
 _HANDLERS = {

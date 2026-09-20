@@ -15,6 +15,7 @@ from userloop.core.entities import ActionStatus, iso
 from userloop.core.journey import PURCHASE_EVENTS
 from userloop.core.loops import evaluate as loops_evaluate, mark_actions_done
 from userloop.core.store import Store, pj
+from userloop.touch.identity import EVENT_IDENT_MAP, lift_contacts
 
 
 def _norm_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +43,12 @@ def _norm_payload(payload: dict[str, Any]) -> dict[str, Any]:
 async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) -> dict[str, Any]:
     p = _norm_payload(payload)
     now_iso = iso()
+    ctx.store = store          # 让适配器（MFlow 选题绑定等）在总线路径也能写身份
+
+    # 顺着 payload/props 已有字段抬邮箱，不另造采集点
+    lifted = lift_contacts(payload, p, p.get("props") or {})
+    if lifted.get("email") and not p.get("email"):
+        p["email"] = lifted["email"]
 
     # ── 身份识别（识别优先级：匿名标识已知归属 > distinct_id 命中 > 新建）──
     merged_info: dict | None = None
@@ -52,17 +59,11 @@ async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) ->
     else:
         user = await store.upsert_user(p["distinct_id"], email=p["email"], name=p["name"], props=p["props"])
 
-    # 事件里带实名标识（email/phone/openid）→ 绑定；若标识已属他人则**合并**（匿名→实名归一）
-    ident_props = {**(p["props"] or {})}
+    # 事件里带实名标识（email/phone/openid/跨系统 id）→ 绑定；已属他人则合并
+    ident_props = {**(p["props"] or {}), **lifted}
     if p.get("email"):
         ident_props.setdefault("email", p["email"])
-    ident_map = {"email": "email", "phone": "phone", "mobile": "phone",
-                 "openid": "wechat_openid", "unionid": "wechat_unionid",
-                 "wecom_userid": "wecom_userid", "visitor_id": "websflow_visitor",
-                 # 外部系统标识：OpenFlow 会员（member_id）与访客，实现跨系统身份映射
-                 "member_id": "openflow_member", "openflow_member_id": "openflow_member",
-                 "openflow_visitor_id": "openflow_visitor"}
-    for key, type_ in ident_map.items():
+    for key, type_ in EVENT_IDENT_MAP.items():
         val = ident_props.get(key)
         if not val:
             continue
@@ -134,6 +135,7 @@ async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) ->
                 executed += 1
         await mark_actions_done(store, loop["id"])
 
+    _note_metrics(p["source"], loops, canvas_runs)
     return {
         "status": "ok",
         "event": p["event"],
@@ -147,6 +149,20 @@ async def handle(store: Store, ctx: ExecutorContext, payload: dict[str, Any]) ->
         "canvas_runs": [run["id"] for run in canvas_runs],
         "actions_executed": executed,
     }
+
+
+def _note_metrics(source: str, loops: list[dict], canvas_runs: list[dict]) -> None:
+    """入库/生成的指标（失败静默，绝不影响主链路）。"""
+    try:
+        from userloop.ops.metrics import METRICS
+
+        METRICS.inc("userloop_events_ingested_total", {"source": source or "unknown"})
+        if loops:
+            METRICS.inc("userloop_loops_created_total", value=float(len(loops)))
+        if canvas_runs:
+            METRICS.inc("userloop_canvas_runs_total", value=float(len(canvas_runs)))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def parse_ts(value: str) -> datetime:

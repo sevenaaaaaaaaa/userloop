@@ -215,3 +215,40 @@ OpenFlow 与 WebsFlow 都用 `visitor_id` 这个词，但含义完全不同（Op
 规则简单——**渲染转义看上下文**：HTML 文本用 `esc`，HTML 属性里的 JS 字面量用 `jsArg`，
 URL 用 `encodeURIComponent`，toast 用 `textContent`。
 
+## L27 抬识别率：主站 track.js 也要听表单，不要只写在 WebsFlow 注入里
+
+WebsFlow 注入只能覆盖我们发布的页；任意站点嵌入 `/track.js` 时，用户照样在填自家表单。
+把 `submit` 抓取 + `identify` 放进主 tracker（不 `preventDefault`），识别率提升才跟得上真实流量。
+Hub 归一化同样顺着已有字段抬邮箱（Shopify `customer.email` / Segment traits），缺顶层 `email` 会建档但不实名。
+
+## L28 契约探测要认「活着」而不是「恰好 200」
+
+家族 API 对 GET 常回 405/401（方法不允许或要鉴权）。把这些当成 down 会天天误报。
+探测口径：2xx/3xx/400/401/403/405 = 对端活着（401/403 记 warn）；超时与 5xx 才是断链。
+未配置的集成记 skipped，不告警。同机互调优先 `internal_url`。
+
+## L29 MCP 写操作必须走自己的状态机和审批门
+
+对外开放（OpenAPI / MCP）不等于开放写库。第三方只能 `create_campaign`（拆解+待审）或 `approve_campaign`（走白名单执行器）。
+禁止 MCP 直接 `put_template(enabled=True)` 或直接调触达。草稿 Loop 默认停用，人审后才可能启用。
+
+## L30 计费默认只记账，enforce 才拦截
+
+用量台账要尽早转起来，但默认 `billing.enforce=false`，避免本地演示和存量测试被 429。
+配额门打开后按租户日用量拦 `events`；触达成功且非 dry-run 才记 `touches`。
+
+## L27 备份要「一致性快照」，恢复要「留回滚副本」
+
+直接 `cp` 正在写入的 SQLite 文件，可能拷到半写状态（WAL 未落盘）——恢复时才发现库损坏。
+正确做法：**备份**用 `VACUUM INTO`（SQLite 原生的在线一致性快照，不需要停服）；
+**恢复**先把现有 `data_dir` 改名留存 `data.bak.<ts>` 再落新数据，让恢复本身可回滚。
+另外：事件表在外部 MySQL 时 SQLite 快照不含它，必须在 manifest 里标注并单独 `mysqldump`，
+否则会出现「恢复后用户还在、事件全丢」的静默数据事故。
+
+## L28 接口签名冲突，在最窄处兼容，别改调用点
+
+工作区出现 `billing.record(..., amount=N)` 与 `record(..., quantity=1)` 不一致，
+5 个测试直接 TypeError。修法有两种：改 3 个调用点，或在**函数签名**加兼容别名
+（`quantity=1, amount=None`）。选后者——改动面最小、不影响任何现有调用方，
+也避免与并行工作的代码产生冲突。**判断准则：修复放在「被多处调用的那个函数」里**。
+

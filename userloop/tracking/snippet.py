@@ -66,6 +66,23 @@ _TEMPLATE = """/* UserLoop Tracker v1 —— 嵌入：<script src="/track.js"></
   }
   window.userloop = { track: track, identify: identify, flush: function(){ flush(true); }, uid: uid, session: sid };
   track("page_view", { page: location.pathname, ref: document.referrer, title: document.title });
+  // 顺着页面已有表单抬实名：不拦截提交、失败静默（L23）
+  document.addEventListener("submit", function (ev) {
+    var form = ev.target;
+    if (!form || form.tagName !== "FORM") return;
+    var email = "", phone = "";
+    try {
+      var ins = form.querySelectorAll ? form.querySelectorAll("input") : [];
+      for (var i = 0; i < ins.length; i++) {
+        var v = (ins[i].value || "").trim();
+        var n = ((ins[i].name || "") + " " + (ins[i].id || "") + " " + (ins[i].type || "")).toLowerCase();
+        if (!email && (n.indexOf("email") >= 0 || /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(v))) email = v;
+        if (!phone && (ins[i].type === "tel" || n.indexOf("phone") >= 0 || n.indexOf("mobile") >= 0) && v) phone = v;
+      }
+    } catch (e) {}
+    try { track("form_submit", { page: location.pathname, has_email: !!email, has_phone: !!phone }); } catch (e) {}
+    try { if (email || phone) identify({ email: email, phone: phone }); } catch (e) {}
+  }, true);
   document.addEventListener("click", function (e) {
     var el = e.target.closest("[data-ul-track],a,button");
     if (!el) return;
@@ -119,7 +136,13 @@ def normalize_batch(batch: dict) -> list[dict]:
         }
         if e.get("ts"):
             item["ts"] = e["ts"]
-        if e.get("email"):
-            item["email"] = e["email"]
+        email = e.get("email") or props.get("email")
+        phone = e.get("phone") or props.get("phone")
+        if email:
+            item["email"] = email
+            props.setdefault("email", email)
+        if phone:
+            props.setdefault("phone", phone)
+        item["props"] = props
         out.append(item)
     return out

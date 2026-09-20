@@ -49,7 +49,7 @@
 | 缺口 | 价值 | 依赖 |
 |---|---|---|
 | **UserLoop ↔ OpenFlow 画布（已打通 ✅）** | **UserLoop → OpenFlow**：`openflow.automation` 动作 → 桥接插件 `/api/plugin/userloop-bridge/automation` → `flow_handle()`（系统唯一入口：CDP + 自动化 + 画布）。**OpenFlow → UserLoop**：`POST /api/v1/loops/trigger`（按 template_id / event / stage 启动 Loop，仍走冷却与频控护栏） | ✅ 双向实测：桥接日志 `automation userloop_journey -> {"triggers":["automation","canvas"]}`；外部触发 `churn_risk_rescue` → `created: [{loop_id…}]` |
-| **跨系统统一身份（余下）** | 全域归因 | ✅ WebsFlow visitor 已打通；余 OpenFlow `member_id` / MFlow 选题回传 |
+| **跨系统统一身份（已完成 ✅）** | 全域归因 | ✅ WebsFlow visitor / OpenFlow `member_id` / **MFlow `mflow_item` 选题回传**（创建时绑定，发布回流按 item_id 认回旅程用户） |
 | **对话式触达（已交付框架 ✅）** | 用户消息 → AI 回复 → 原渠道回出（渠道无关，含多轮记忆/身份绑定/降级） | ✅ 实测：真实 DeepSeek 回复（主动追问澄清）；对话入库（inbound 1 / replies 1）。**接入微信/WhatsApp 只需把它们收到的消息 POST 到 `/api/v1/hub/message`**（渠道凭据到位即可） |
 
 ## 二、UserLoop 在产品矩阵中的角色与护城河
@@ -75,8 +75,8 @@
 | **N0（已达成）** | 单站点全旅程闭环 | 事件总线/旅程/Loop/触点/AI 决策/实验/预测/合规/多租户/双语 | 真实站点访客进来即形成 Loop 并验证回流 |
 | **N1 生态互联** | 四通道全通，情报→动作最短闭环 | inFlow 洞察接入、MFlow 发布回流、WebsFlow 事件回流、跨系统身份映射 | 一条"竞品异动"情报能自动生成并执行运营 Loop，效果回流到情报系统 |
 | **N2 运营资产市场（已完成 ✅）** | 跨租户可复用的模板/分群/实验资产（**只流转定义，不流转数据**） | 4 个行业资产包（电商/SaaS/教育/本地服务）、资产导入导出（JSON，可预览/幂等/前缀共存）、模板**版本化快照与回滚**、**审批门**（导入即停用待批） | ✅ 实测：空租户 `n2demo` → 预览（3 模板+1 实验+2 分群）→ 一键应用 → **加购事件立刻触发 `ec_cart_abandon` Loop**（动作 pending）→ 改名后回滚恢复原名 |
-| **N3 智能体运营团队** | 多智能体协作（内容/触达/客服/分析各司其职，审批门下自主） | 角色化 Agent（各自目标+工具白名单）、跨 Agent 任务编排、预算与审批 | 一个运营目标（如"本月复购率 +10%"）由 Agent 团队自主拆解执行，人工只审批 |
-| **N4 平台化** | 对外开放与商业化 | 插件市场（source/action/model/template）、OpenAPI + MCP 双向、租户计费与配额 | 第三方按四类插件接入；按租户用量计费 |
+| **N3 智能体运营团队（已完成 ✅）** | 多智能体协作（内容/触达/客服/分析各司其职，审批门下自主） | 角色化 Agent（analyst/content/outreach/support + 工具白名单）、确定性配方拆解（复购/激活/流失）、战役预算、中风险等人审 | ✅ `本月复购率 +10%` → 分析先跑基线，内容/触达任务 `pending_approval`；人只点批准 → 停用态 Loop 草稿 + 资产包待批；MCP/控制台同一条状态机 |
+| **N4 平台化（已完成 ✅）** | 对外开放与商业化 | 插件市场（source/action/model/template，内置+`data/plugins/*.json`）、OpenAPI `/api/v1/openapi.json` + MCP 双向（写走审批）、租户用量台账与可选配额门 | ✅ 四类插件可列可覆盖；`plugin.<id>` webhook 出站；`billing.enforce` 才 429，默认只记账 |
 
 **北极星指标（贯穿各阶段）**：
 识别率 → Loop effective 率 → 每用户触达带来的增量转化 → AI 决策采纳率 → 少打扰次数（体验）→ 租户数
@@ -106,7 +106,7 @@ UserLoop 在此基础上加一条独有能力：**用自身的 AI 大脑与审�
 | 风险 | 应对 |
 |---|---|
 | 跨系统数据一致性与身份错配 | 身份图谱 + 合并审计；跨系统映射表（N1 交付） |
-| API 变更导致断链 | 契约探测（capabilities 端点）+ 降级路径 + 每日探测告警 |
+| API 变更导致断链 | ✅ 契约探测：`GET /api/v1/capabilities` 广告本契约；每 6h + 每日探测 OpenFlow/MFlow/WebsFlow/inFlow；断链进自诊断（`contract_broken`）+ 控制台「契约探测」面板 |
 | 多租户串数据 | 独立目录/独立事件库（已修串库缺陷）+ 回归测试 |
 | 自进化"乱改配置" | 配置变更白名单 + 影响/风险标注 + 审批门 + 一键回滚（记录旧值） |
 | 合规（出海/国内） | consent 门 + DSAR + 语言/时区 + 数据本地化（每租户独立库） |

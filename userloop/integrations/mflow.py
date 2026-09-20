@@ -127,6 +127,7 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
                 # 外部再推进会造成状态冲突。我们只登记 item + 入队 loop。
                 result.update(ok=True, ref=res.get("id"), item_id=item_id,
                               queued=res.get("queued", True), register_ok=r1.get("ok", False))
+                await _bind_topic_identity(ctx, user, item_id, source="mflow.create_content")
             else:
                 result.update(ok=False, error=res.get("error"))
         elif atype == "mflow.register_topic":
@@ -135,6 +136,8 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
                               {"id": item_id, "category": payload.get("type", "blog"), "title": topic[:120]},
                               transport=transport)
             result.update(ok=bool(res.get("ok")), ref=item_id, error=res.get("error"))
+            if result.get("ok"):
+                await _bind_topic_identity(ctx, user, item_id, source="mflow.register_topic")
         elif atype == "mflow.content_status":
             lid = str(payload.get("loop_id") or loop.get("id") or "")
             data = await _call(cfg, "GET", f"/api/loop/detail?id={lid}", transport=transport)
@@ -144,3 +147,15 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
     except Exception as exc:  # noqa: BLE001
         result.update(ok=False, error=str(exc))
     return result
+
+
+async def _bind_topic_identity(ctx: ExecutorContext, user: dict, item_id: str, source: str) -> None:
+    """选题创建时把 mflow_item → 旅程用户绑上，发布回流才能认回同一人。"""
+    store = getattr(ctx, "store", None)
+    uid = user.get("id")
+    if not store or not uid or not item_id:
+        return
+    try:
+        await store.bind_identity(uid, "mflow_item", str(item_id), source=source)
+    except Exception:  # noqa: BLE001
+        pass

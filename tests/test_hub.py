@@ -35,7 +35,11 @@ def test_normalize_shopify() -> None:
     out = normalize("shopify", {"email": "s@x.com", "financial_status": "paid", "total_price": "199",
                                 "currency": "USD", "line_items": [{"title": "Plan", "quantity": 1, "price": "199"}]})
     assert out[0]["event"] == "purchase" and out[0]["props"]["amount"] == "199"
+    assert out[0]["email"] == "s@x.com" and out[0]["props"]["email"] == "s@x.com"
     assert out[0]["props"]["items"][0]["title"] == "Plan"
+    nested = normalize("shopify", {"financial_status": "paid", "total_price": "1",
+                                   "customer": {"email": "c@x.com"}})
+    assert nested[0]["email"] == "c@x.com"
     # 非支付状态 → 空（纯指标行不进总线）
     assert normalize("shopify", {"email": "s@x.com", "financial_status": "pending"}) == []
 
@@ -61,6 +65,7 @@ async def test_hub_ingest_end_to_end(tmp_path) -> None:
         users = client.get("/api/v1/users").json()
         buyer = [u for u in users["users"] if u["distinct_id"] == "buyer@x.com"]
         assert buyer and buyer[0]["stage"] == "paying"
+        assert buyer[0]["email"] == "buyer@x.com"
         # 原始档案留存
         assert (tmp_path / "hub" / "shopify.jsonl").exists()
 

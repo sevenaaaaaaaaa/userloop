@@ -71,6 +71,11 @@ async def test_mflow_create_content(tmp_path) -> None:
             return httpx.Response(200, json={"ok": True, "id": "loop_abc", "queued": True})
         return httpx.Response(200, json={"ok": True})
 
+    from userloop.core.store import Store
+
+    store = Store(str(tmp_path / "mf.db"), {})
+    await store.connect()
+    ctx.store = store
     action = {"type": "mflow.create_content",
               "payload": {"_transport": httpx.MockTransport(handler), "topic": "旅程信号", "brief": "断点召回"}}
     loop = {"id": "loop_2", "template_id": "t2", "trigger": {}}
@@ -82,6 +87,9 @@ async def test_mflow_create_content(tmp_path) -> None:
     assert any("/api/item/upsert" in u for u in seen["calls"])
     assert any("/api/loop/create" in u for u in seen["calls"])
     assert not any("/api/item/advance" in u for u in seen["calls"]), "不应干预 MFlow 状态机"
+    assert result.get("item_id")
+    assert await store.resolve_identity("mflow_item", result["item_id"]) == "u_abcdef"
+    await store.close()
 
 
 async def test_mflow_register_topic(tmp_path) -> None:

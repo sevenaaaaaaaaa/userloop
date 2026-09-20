@@ -36,15 +36,16 @@ async def test_telemetry_and_diagnose(store: Store, tmp_path) -> None:
     await store.upsert_user("u1", email="u1@x.com")
     for i in range(60):
         await store.upsert_user(f"anon{i}")
-    from userloop.core.store import new_id
+    from userloop.core.store import iso_now, new_id
 
     loop_id = new_id("loop")
     await store.insert_loop({"id": loop_id, "template_id": "t", "user_id": "u1", "status": "running",
                              "trigger": {}, "context": {}, "created_at": "2026-09-18T00:00:00Z",
                              "updated_at": "2026-09-18T00:00:00Z"})
+    now = iso_now()
     await store.insert_action({"id": new_id("act"), "loop_id": loop_id, "seq": 1, "type": "touch.email",
                                "payload": {}, "delay_minutes": 0, "status": "failed",
-                               "scheduled_at": "2026-09-18T00:00:00Z", "executed_at": "2026-09-18T00:00:00Z",
+                               "scheduled_at": now, "executed_at": now,
                                "result": "{}"})
     for i in range(25):
         await store.insert_ai_decision({"id": f"ai{i}", "user_id": "u1", "intent": "send_email",
