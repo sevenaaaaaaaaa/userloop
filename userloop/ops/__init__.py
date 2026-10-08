@@ -7,6 +7,6 @@
 - **告警有冷却**：同一告警在冷却窗口内只报一次，避免刷屏；可 webhook 外送
 """
 
-from userloop.ops import alerts, backup, health, metrics  # noqa: F401
+from userloop.ops import alerts, backup, health, metrics, offsite  # noqa: F401
 
-__all__ = ["alerts", "backup", "health", "metrics"]
+__all__ = ["alerts", "backup", "health", "metrics", "offsite"]

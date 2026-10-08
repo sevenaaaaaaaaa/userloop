@@ -305,14 +305,77 @@ def ops_metrics(data_dir: str | None, as_json: bool) -> None:
 @click.option("--data-dir", default=None)
 @click.option("--keep", default=7, help="保留最近 N 份")
 @click.option("--note", default="cli", help="备注")
-def ops_backup(data_dir: str | None, keep: int, note: str) -> None:
-    """创建备份（SQLite 一致性快照 + tar.gz + 保留策略）。"""
+@click.option("--offsite/--no-offsite", "offsite_flag", default=None,
+              help="是否推送到 R2（默认按配置 ops.offsite.enabled）")
+def ops_backup(data_dir: str | None, keep: int, note: str, offsite_flag: bool | None) -> None:
+    """创建备份（SQLite 一致性快照 + tar.gz + 保留策略）；启用后自动异地化到 R2。"""
     from userloop.config import load_config as _lc
     from userloop.ops import backup as backup_mod
+    from userloop.ops import offsite as offsite_mod
 
     cfg = _lc(data_dir)
     out = backup_mod.create(cfg["data_dir"], keep=keep, note=note, cfg=cfg)
+    do_off = offsite_mod.enabled(cfg) if offsite_flag is None else offsite_flag
+
+    async def _push() -> dict:
+        if not out.get("ok") or not do_off:
+            return {"ok": False, "skipped": True, "error": "未启用/无归档"}
+        up = await offsite_mod.upload_archive(cfg, out["path"])
+        pr = await offsite_mod.prune_remote(cfg, keep=keep)
+        return {**up, "pruned": pr.get("deleted", [])}
+
+    if do_off:
+        out["offsite"] = asyncio.run(_push())
     console.print_json(json.dumps(out, ensure_ascii=False, default=str))
+
+
+@ops.command("offsite-list")
+@click.option("--data-dir", default=None)
+def ops_offsite_list(data_dir: str | None) -> None:
+    """列出 R2 上的备份对象。"""
+    from userloop.config import load_config as _lc
+    from userloop.ops import offsite as offsite_mod
+
+    cfg = _lc(data_dir)
+    r = asyncio.run(offsite_mod.list_remote(cfg))
+    if not r.get("ok"):
+        console.print(f"[red]失败：{r.get('error') or '未配置'}[/]")
+        return
+    table = Table(title=f"R2 备份（前缀 {r.get('prefix')}，{len(r['objects'])} 个）")
+    table.add_column("Key"); table.add_column("MB", justify="right"); table.add_column("修改时间")
+    for o in r["objects"]:
+        table.add_row(o["key"], f"{o['bytes'] / 1e6:.2f}", o["last_modified"])
+    console.print(table)
+
+
+@ops.command("offsite-prune")
+@click.option("--data-dir", default=None)
+@click.option("--keep", default=7, help="远端保留最近 N 份")
+def ops_offsite_prune(data_dir: str | None, keep: int) -> None:
+    """清理 R2 上的旧备份（保留最近 N 份）。"""
+    from userloop.config import load_config as _lc
+    from userloop.ops import offsite as offsite_mod
+
+    cfg = _lc(data_dir)
+    console.print_json(json.dumps(asyncio.run(offsite_mod.prune_remote(cfg, keep=keep)),
+                                  ensure_ascii=False, default=str))
+
+
+@ops.command("offsite-fetch")
+@click.argument("key")
+@click.option("--data-dir", default=None)
+@click.option("--dest", default=None, help="落地路径（默认 data/backups/<basename>）")
+def ops_offsite_fetch(key: str, data_dir: str | None, dest: str | None) -> None:
+    """从 R2 拉回指定备份（异地恢复演练/真恢复）。"""
+    import os as _os
+
+    from userloop.config import load_config as _lc
+    from userloop.ops import offsite as offsite_mod
+
+    cfg = _lc(data_dir)
+    dest = dest or _os.path.join(cfg["data_dir"], "backups", _os.path.basename(key))
+    console.print_json(json.dumps(asyncio.run(offsite_mod.download(cfg, key, dest)),
+                                  ensure_ascii=False, default=str))
 
 
 @ops.command("backups")

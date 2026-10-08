@@ -261,3 +261,10 @@ Hub 归一化同样顺着已有字段抬邮箱（Shopify `customer.email` / Segm
 VACUUM INTO 本身不修改源库。**测试要用「开着 WAL 连接的活库」而不是造假的边车文件**，
 否则测不出真实行为。
 
+## L30 云存储备份：手写 SigV4 比引依赖更稳，且要"失败不拖累本地备份"
+
+给 Python 服务接 R2/S3，不必引 boto3（重依赖、版本敏感）——SigV4 用 hashlib/hmac 手写约 40 行，
+用已有的 httpx 发请求即可。关键是**失败降级**：外存不可达时本地备份必须照常成功，
+异地结果作为附加字段返回（`offsite.ok=false`），绝不让"异地"反噬"本地"这最后一道防线。
+另：备份对象必须与公开资产**前缀隔离**（`userloop-backups/` vs `assets/`），CDN 只映射 assets，备份结构上不可公开访问。
+

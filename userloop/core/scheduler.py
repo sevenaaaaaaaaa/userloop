@@ -281,7 +281,14 @@ async def _run_global(ctx: ExecutorContext, job: str) -> dict:
 
         ops = ctx.config.get("ops") or {}
         keep = int(((ops.get("backup") or {}).get("keep")) or 7)
-        return backup_mod.create(ctx.config["data_dir"], keep=keep, note="scheduled", cfg=ctx.config)
+        out = backup_mod.create(ctx.config["data_dir"], keep=keep, note="scheduled", cfg=ctx.config)
+        from userloop.ops import offsite as offsite_mod
+
+        if out.get("ok") and offsite_mod.enabled(ctx.config):
+            out["offsite"] = await offsite_mod.upload_archive(ctx.config, out["path"])
+            okeep = int(((ops.get("offsite") or {}).get("keep")) or keep)
+            out["offsite_pruned"] = (await offsite_mod.prune_remote(ctx.config, keep=okeep)).get("deleted", [])
+        return out
 
     from userloop.core.tenants import DEFAULT_TENANT, TenantStores
     from userloop.ops import alerts as alerts_mod

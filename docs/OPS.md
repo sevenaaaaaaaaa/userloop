@@ -117,3 +117,39 @@ API：`GET /api/v1/ops/backups`、`POST /api/v1/ops/backup`、`GET /api/v1/ops/b
 
 输出 RPS、错误数、p50/p95/p99。写入模式会生成 `loadtest_*` 用户与 `loadtest_event` 事件，
 生产压测后可按前缀清理或走合规中心删除。
+
+
+## 6. 异地备份（Cloudflare R2）
+
+把本地备份归档推送到 R2（S3 兼容），实现**异地容灾**。纯标准库 SigV4（仅用 httpx），无需 boto3。
+
+配置（`data/config.json`）：
+
+```json
+{ "ops": { "offsite": {
+  "enabled": true,
+  "endpoint": "https://<account_id>.r2.cloudflarestorage.com",
+  "bucket": "nownexts-static",
+  "region": "auto",
+  "prefix": "userloop-backups",
+  "keep": 7,
+  "access_key": "...", "secret_key": "..."
+} } }
+```
+
+行为：
+- `userloop ops backup`（及每日调度、`POST /api/v1/ops/backup`）在本地备份成功后**自动上传 R2 并按 `keep` 清理远端**。
+- R2 不可达时**静默降级**（本地备份照常，结果里带 `offsite.ok=false`）。
+- 事件表在外部 MySQL 时，SQLite 快照不含 events，需另行 `mysqldump`（manifest 已标注）。
+
+CLI：
+```
+userloop ops backup                 # 建本地备份 + 自动异地化（按配置）
+userloop ops backup --no-offsite    # 仅本地
+userloop ops offsite-list           # 列出 R2 上的备份
+userloop ops offsite-prune --keep 7 # 清理远端旧档
+userloop ops offsite-fetch <key>    # 从 R2 拉回（异地恢复演练/真恢复）
+```
+
+> 隔离建议：备份 key 前缀（如 `userloop-backups/`）与公开资产前缀（`assets/`）不同，
+> CDN 只映射 `/assets/*`，因此备份对象**结构上不可公开访问**——但更硬的隔离是给备份用**独立桶**。

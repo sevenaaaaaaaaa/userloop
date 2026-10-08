@@ -1041,8 +1041,13 @@ def create_app(data_dir: str | None = None) -> Any:
     @app.get(f"{prefix}/api/v1/ops/backups")
     async def ops_backups() -> JSONResponse:
         from userloop.ops import backup as backup_mod
+        from userloop.ops import offsite as offsite_mod
 
-        return JSONResponse({"backups": backup_mod.list_backups(cfg["data_dir"])})
+        out: dict = {"backups": backup_mod.list_backups(cfg["data_dir"]),
+                     "offsite_enabled": offsite_mod.enabled(cfg)}
+        if out["offsite_enabled"]:
+            out["remote"] = (await offsite_mod.list_remote(cfg)).get("objects", [])
+        return JSONResponse(out)
 
     @app.post(f"{prefix}/api/v1/ops/backup")
     async def ops_backup(request: Request) -> JSONResponse:
@@ -1058,6 +1063,12 @@ def create_app(data_dir: str | None = None) -> Any:
         keep = int(body.get("keep") or ops.get("keep") or 7)
         out = await asyncio.to_thread(backup_mod.create, cfg["data_dir"], keep,
                                       str(body.get("note") or "manual"), cfg)
+        from userloop.ops import offsite as offsite_mod
+
+        if out.get("ok") and offsite_mod.enabled(cfg):
+            out["offsite"] = await offsite_mod.upload_archive(cfg, out["path"])
+            okeep = int(((cfg.get("ops") or {}).get("offsite") or {}).get("keep") or keep)
+            out["offsite_pruned"] = (await offsite_mod.prune_remote(cfg, keep=okeep)).get("deleted", [])
         return JSONResponse(out)
 
     @app.get(f"{prefix}/api/v1/ops/backups/verify")

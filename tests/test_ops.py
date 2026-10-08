@@ -224,3 +224,95 @@ def test_version_single_source() -> None:
 
     root = pathlib.Path(__file__).resolve().parent.parent / "VERSION"
     assert __version__ == root.read_text(encoding="utf-8").strip()
+
+
+# ── R2 异地备份（offsite）──
+
+from userloop.ops import offsite as offsite_mod  # noqa: E402
+
+
+def _r2cfg(**over):
+    base = {"ops": {"offsite": {"enabled": True, "endpoint": "https://acct.r2.cloudflarestorage.com",
+                                "bucket": "nownexts-static", "region": "auto",
+                                "prefix": "userloop-backups", "access_key": "AK", "secret_key": "SK"}}}
+    base["ops"]["offsite"].update(over)
+    return base
+
+
+def test_sigv4_headers_deterministic_and_wellformed() -> None:
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=timezone.utc)
+    h1 = offsite_mod.sign_headers("PUT", "acct.r2.cloudflarestorage.com",
+                                  "/nownexts-static/userloop-backups/x.tar.gz", None,
+                                  b"data", "AK", "SK", "auto", {"content-type": "application/gzip"}, now)
+    h2 = offsite_mod.sign_headers("PUT", "acct.r2.cloudflarestorage.com",
+                                  "/nownexts-static/userloop-backups/x.tar.gz", None,
+                                  b"data", "AK", "SK", "auto", {"content-type": "application/gzip"}, now)
+    assert h1 == h2
+    auth = h1["authorization"]
+    assert auth.startswith("AWS4-HMAC-SHA256 Credential=AK/20261008/auto/s3/aws4_request")
+    assert "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date" in auth
+    assert h1["x-amz-date"] == "20261008T120000Z"
+    assert h1["x-amz-content-sha256"] == __import__("hashlib").sha256(b"data").hexdigest()
+
+
+def test_offsite_enabled_gating() -> None:
+    assert offsite_mod.enabled(_r2cfg()) is True
+    assert offsite_mod.enabled({"ops": {"offsite": {"enabled": True}}}) is False   # 缺 endpoint/密钥
+    assert offsite_mod.enabled({"ops": {"offsite": {"enabled": False}}}) is False
+
+
+async def test_offsite_upload_list_prune(monkeypatch, tmp_path) -> None:
+    calls: list[dict] = []
+    state = {"status": 200, "body": b""}
+
+    class FakeClient:
+        def __init__(self, **kw) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> bool:
+            return False
+
+        async def request(self, method, url, params=None, content=b"", headers=None):
+            calls.append({"method": method, "url": url, "params": params, "len": len(content or b""),
+                          "auth": (headers or {}).get("Authorization", "")})
+            return offsite_mod.httpx.Response(state["status"], content=state["body"],
+                                              request=offsite_mod.httpx.Request(method, url))
+
+    monkeypatch.setattr(offsite_mod.httpx, "AsyncClient", FakeClient)
+    cfg = _r2cfg()
+
+    # 上传
+    p = tmp_path / "backup-20261008-120000-000.tar.gz"
+    p.write_bytes(b"gzdata")
+    up = await offsite_mod.upload_archive(cfg, str(p))
+    assert up["ok"] and up["key"] == "userloop-backups/backup-20261008-120000-000.tar.gz"
+    assert calls[-1]["method"] == "PUT" and calls[-1]["len"] == 6
+    assert "/nownexts-static/userloop-backups/" in calls[-1]["url"]   # path-style
+    assert calls[-1]["auth"].startswith("AWS4-HMAC-SHA256")
+
+    # 列举
+    state["body"] = (b'<?xml version="1.0"?><ListBucketResult>'
+                     b'<Contents><Key>userloop-backups/backup-20261008-120000-000.tar.gz</Key><Size>10</Size>'
+                     b'<LastModified>2026-10-08T00:00:00.000Z</LastModified></Contents>'
+                     b'<Contents><Key>userloop-backups/backup-20261007-120000-000.tar.gz</Key><Size>20</Size>'
+                     b'<LastModified>2026-10-07T00:00:00.000Z</LastModified></Contents>'
+                     b'</ListBucketResult>')
+    lst = await offsite_mod.list_remote(cfg)
+    assert lst["ok"] and len(lst["objects"]) == 2
+    assert calls[-1]["method"] == "GET" and calls[-1]["params"]["prefix"] == "userloop-backups/"
+
+    # 远端保留：keep=1 → 删除更旧的（备份名含时间戳，key 倒序即时间序）
+    pr = await offsite_mod.prune_remote(cfg, keep=1)
+    assert pr["ok"] and "userloop-backups/backup-20261007-120000-000.tar.gz" in pr["deleted"]
+
+
+async def test_offsite_disabled_is_safe(tmp_path) -> None:
+    cfg = {"ops": {"offsite": {"enabled": False}}}
+    assert (await offsite_mod.upload_archive(cfg, str(tmp_path / "x")))["skipped"] is True
+    assert (await offsite_mod.list_remote(cfg))["skipped"] is True
+    assert offsite_mod.enabled(cfg) is False

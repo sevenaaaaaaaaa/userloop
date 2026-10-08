@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.6.2 — UserLoop 备份异地化到 Cloudflare R2（2026-10-08）
+
+**新增** `userloop/ops/offsite.py`：纯标准库 AWS SigV4（仅 httpx）把备份归档推送到 R2，
+支持上传/列举/远端保留/拉回；R2 不可达时静默降级不影响本地备份。
+接线：`POST /api/v1/ops/backup`、每日调度 `backup` 任务、CLI `ops backup|offsite-list|offsite-prune|offsite-fetch`。
+文档：`docs/OPS.md` 第 6 节。测试：SigV4 确定性 + 上传/列举/清理 + 停用安全（212 全绿）。
+
 ## 0.6.1 — 备份修复（2026-09-18）
 
 **修复**：① 备份排除 SQLite 边车文件（`-wal/-shm/-journal`）——它们属原库，入包会在恢复时
