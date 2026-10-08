@@ -169,6 +169,9 @@ async def download(cfg: dict, key: str, dest: str) -> dict[str, Any]:
     """从 R2 拉回一个对象（恢复演练/真恢复用）。"""
     if not enabled(cfg):
         return {"ok": False, "skipped": True, "error": "未配置/未启用"}
+    if not key or key.strip() in ("", "/") or key.endswith("/"):
+        # 空 key 的 GET 会落到「列桶」语义并返回 XML，绝不能当成对象写入
+        return {"ok": False, "error": "key 不能为空（需完整对象 key，如 userloop-backups/xxx.tar.gz）"}
     try:
         r = await _request(cfg, "GET", key)
         if r.status_code != 200:

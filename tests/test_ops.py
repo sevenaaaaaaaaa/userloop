@@ -316,3 +316,9 @@ async def test_offsite_disabled_is_safe(tmp_path) -> None:
     assert (await offsite_mod.upload_archive(cfg, str(tmp_path / "x")))["skipped"] is True
     assert (await offsite_mod.list_remote(cfg))["skipped"] is True
     assert offsite_mod.enabled(cfg) is False
+
+
+async def test_offsite_download_rejects_empty_key(tmp_path) -> None:
+    """空 key 的 GET 会返回桶列表 XML，绝不能当作对象保存。"""
+    r = await offsite_mod.download(_r2cfg(), "", str(tmp_path / "x"))
+    assert r["ok"] is False and "key" in r["error"]

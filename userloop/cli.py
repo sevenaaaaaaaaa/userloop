@@ -342,7 +342,8 @@ def ops_offsite_list(data_dir: str | None) -> None:
         console.print(f"[red]失败：{r.get('error') or '未配置'}[/]")
         return
     table = Table(title=f"R2 备份（前缀 {r.get('prefix')}，{len(r['objects'])} 个）")
-    table.add_column("Key"); table.add_column("MB", justify="right"); table.add_column("修改时间")
+    table.add_column("Key", no_wrap=True, overflow="fold")
+    table.add_column("MB", justify="right"); table.add_column("修改时间")
     for o in r["objects"]:
         table.add_row(o["key"], f"{o['bytes'] / 1e6:.2f}", o["last_modified"])
     console.print(table)
