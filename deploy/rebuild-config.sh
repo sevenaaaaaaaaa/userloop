@@ -11,6 +11,7 @@ cp -f "$CFG" "$CFG.broken-$(date +%s)" || true
 
 python3 - "$MYSQL_CRED" "$OF_PLUGIN_CFG" "$BRIDGE_CFG" "$INBOUND" <<'PYEOF'
 import json
+import os
 import sys
 
 mysql_cred, of_plugin, bridge_cfg, inbound = sys.argv[1:5]
@@ -44,9 +45,11 @@ cfg = {
                      "bridge_token": bridge_token},
         "mflow": {"base_url": None, "password": ""},
     },
-    "ai": {"base_url": "https://api.deepseek.com/v1",
-           "api_key": "***REDACTED***",
-           "model": "deepseek-chat", "temperature": 0.8, "max_tokens": 300,
+    # AI 凭据一律从环境变量读取，绝不入库（USERLOOP_AI_BASE_URL / USERLOOP_AI_KEY / USERLOOP_AI_MODEL）
+    "ai": {"base_url": os.environ.get("USERLOOP_AI_BASE_URL", ""),
+           "api_key": os.environ.get("USERLOOP_AI_KEY", ""),
+           "model": os.environ.get("USERLOOP_AI_MODEL", ""),
+           "temperature": 0.8, "max_tokens": 300,
            "brain": {"enabled": True, "batch_size": 3, "min_gap_hours": 24, "weekly_cap": 3,
                      "daily_budget": 200, "auto_execute_medium": False,
                      "quiet_hours": [22, 8], "tz_offset_hours": 8}},

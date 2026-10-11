@@ -25,7 +25,7 @@ SYSTEM_PROMPT = (
 
 
 def _client(cfg: dict, transport: Any = None) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=30, base_url=cfg.get("base_url", "https://api.deepseek.com/v1"),
+    return httpx.AsyncClient(timeout=30, base_url=cfg.get("base_url", ""),
                              transport=transport)
 
 
