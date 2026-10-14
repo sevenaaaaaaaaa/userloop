@@ -87,7 +87,7 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 TAR=/tmp/userloop-sync.tar.gz
-tar czf "$TAR" \
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$TAR" \
   --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
   --exclude .pytest_cache --exclude '*.pyc' --exclude .DS_Store \
   --exclude .gitignore --exclude .gitattributes \
