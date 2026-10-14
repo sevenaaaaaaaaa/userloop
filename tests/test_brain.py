@@ -272,7 +272,7 @@ async def test_reporter_builds_with_narrative(tmp_path) -> None:
             return _httpx.Response(200, json={"choices": [{"message": {"content":
                 "## 本周概览\n注册 1 人。\n## 关键发现\n暂无。\n## 最大漏损\n访客占比过高。\n## 下周建议\n1. 清空待批队列\n2. 上激活引导\n3. 复用 winner 版式"}}]})
 
-        ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t"}})
+        ctx = _ctx(tmp_path, {"ai": {"base_url": "https://api.deepseek.com/v1", "api_key": "sk-t"}})
         rep = await reporter.build(store, ctx, days=7, transport=_httpx.MockTransport(ok_handler))
         assert rep["ok"] and rep["degraded"] is False
         assert "下周建议" in rep["markdown"]
@@ -303,7 +303,7 @@ async def test_cooldown_prevents_pending_queue_bloat(store: Store, tmp_path) -> 
 
     real_precheck = G.precheck
     G.precheck = lambda *a, **kw: _async({"ok": True, "reason": "ok"})  # type: ignore[assignment]
-    ctx = _ctx(tmp_path, {"ai": {"api_key": "sk-t", "brain": {"enabled": True, "quiet_hours": [0, 0]}}})
+    ctx = _ctx(tmp_path, {"ai": {"base_url": "https://api.deepseek.com/v1", "api_key": "sk-t", "brain": {"enabled": True, "quiet_hours": [0, 0]}}})
     try:
         first = await brain.run_for_user(store, ctx, user, transport=_llm("send_email"))
     finally:
