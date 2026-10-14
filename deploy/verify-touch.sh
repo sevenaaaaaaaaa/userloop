@@ -3,6 +3,8 @@
 set -euo pipefail
 APP=/www/wwwroot/userloop
 cd "$APP"
+: "${USERLOOP_ADMIN_USER:?请先 export USERLOOP_ADMIN_USER（控制台管理员用户名）}"
+: "${USERLOOP_ADMIN_PASSWORD:?请先 export USERLOOP_ADMIN_PASSWORD（控制台管理员密码，勿写入仓库）}"
 
 echo "=== 1. 触发 touch.email（经 OpenFlow 桥：HTML + 追踪 + 退订）==="
 .venv/bin/python - <<'PYEOF'
@@ -37,7 +39,7 @@ grep -A2 "touch-demo@nownexts.com" /var/log/maillog 2>/dev/null | grep "status=s
 echo "=== 3. 模拟收件人打开 + 点击（走 UserLoop 自持追踪）==="
 CJ=/tmp/tc.txt; rm -f $CJ
 curl -s -c $CJ -X POST http://127.0.0.1:8600/userloop/api/login -H "Content-Type: application/json" \
-  -d '{"username":"Seven","password":"ULkp7-mzx2-q94n"}' -o /dev/null
+  -d "$(ADMIN_USER="$USERLOOP_ADMIN_USER" ADMIN_PASS="$USERLOOP_ADMIN_PASSWORD" .venv/bin/python -c 'import json,os; print(json.dumps({"username": os.environ["ADMIN_USER"], "password": os.environ["ADMIN_PASS"]}))')" -o /dev/null
 UID_=$(curl -s -b $CJ "http://127.0.0.1:8600/userloop/api/v1/users?limit=200" | \
   .venv/bin/python -c "import json,sys; print(next((u['id'] for u in json.load(sys.stdin)['users'] if u['distinct_id']=='touch_demo'), ''))")
 TOK=$(.venv/bin/python - "$UID_" <<'PYEOF'

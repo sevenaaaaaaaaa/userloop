@@ -7,14 +7,16 @@ OF_PLUGIN_CFG=/www/wwwroot/nownexts_com/data/plugins/userloop-tracker/config.jso
 BRIDGE_CFG=/www/wwwroot/nownexts_com/data/plugins/userloop-bridge/config.json
 INBOUND=/www/wwwroot/nownexts_com/data/inbound.json
 
-cp -f "$CFG" "$CFG.broken-$(date +%s)" || true
+TS="$(date +%s)"
+cp -f "$CFG" "$CFG.broken-$TS" || true
 
-python3 - "$MYSQL_CRED" "$OF_PLUGIN_CFG" "$BRIDGE_CFG" "$INBOUND" <<'PYEOF'
+python3 - "$MYSQL_CRED" "$OF_PLUGIN_CFG" "$BRIDGE_CFG" "$INBOUND" "$CFG.broken-$TS" <<'PYEOF'
 import json
 import os
 import sys
 
-mysql_cred, of_plugin, bridge_cfg, inbound = sys.argv[1:5]
+mysql_cred, of_plugin, bridge_cfg, inbound, old_cfg = sys.argv[1:6]
+import os
 
 def load(p, default=None):
     try:
@@ -33,6 +35,14 @@ mysql_pw = mysql_line[0].split("=", 1)[1] if mysql_line else ""
 api_token = of_track.get("api_token", "")
 bridge_token = bridge.get("bridge_token", "")
 
+# AI 配置：优先环境变量，否则沿用旧 config.json 的 ai.*；key 缺失则报错退出（不入库、不写空值）
+_old_ai = (load(old_cfg, {}) or {}).get("ai") or {}
+def _ai(field, env):
+    return os.environ.get(env) or _old_ai.get(field) or ""
+ai_key = os.environ.get("USERLOOP_AI_KEY") or os.environ.get("USERLOOP_AI_API_KEY") or _old_ai.get("api_key") or ""
+if not ai_key:
+    sys.exit("ERROR: 缺少 AI key —— 请 export USERLOOP_AI_KEY=... 后重跑（或确保旧 config.json 含 ai.api_key）")
+
 cfg = {
     "api_token": api_token,
     "default_webhook": None,
@@ -45,10 +55,11 @@ cfg = {
                      "bridge_token": bridge_token},
         "mflow": {"base_url": None, "password": ""},
     },
-    # AI 凭据一律从环境变量读取，绝不入库（USERLOOP_AI_BASE_URL / USERLOOP_AI_KEY / USERLOOP_AI_MODEL）
-    "ai": {"base_url": os.environ.get("USERLOOP_AI_BASE_URL", ""),
-           "api_key": os.environ.get("USERLOOP_AI_KEY", ""),
-           "model": os.environ.get("USERLOOP_AI_MODEL", ""),
+    # AI 凭据一律从环境变量读取，绝不入库（USERLOOP_AI_BASE_URL / USERLOOP_AI_KEY / USERLOOP_AI_MODEL）；
+    # 未设置时沿用旧 config.json 的值，绝不写入空值
+    "ai": {"base_url": _ai("base_url", "USERLOOP_AI_BASE_URL"),
+           "api_key": ai_key,
+           "model": _ai("model", "USERLOOP_AI_MODEL"),
            "temperature": 0.8, "max_tokens": 300,
            "brain": {"enabled": True, "batch_size": 3, "min_gap_hours": 24, "weekly_cap": 3,
                      "daily_budget": 200, "auto_execute_medium": False,

@@ -18,5 +18,5 @@ open(path, "w", encoding="utf-8").write(src[:first + 1] + entry + src[first + 1:
                                        if first > 0 else src + "\n" + entry)
 print("CHANGELOG 已更新")
 PYEOF
-bash deploy/sync.sh -y -m "release: v$VER — $SUMMARY" | tail -3
+bash deploy/sync.sh -y -m "chore(release): v$VER — $SUMMARY" | tail -3
 echo "已发版 v$VER"

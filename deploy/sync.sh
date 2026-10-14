@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# UserLoop 一键同步：测试 → git 提交推送 → 服务器同步重启 → 线上验收 → 刷新 Cloudflare 缓存
-# 用法：bash deploy/sync.sh [-m "提交信息"] [-y]
+# UserLoop 双轨同步（唯一入口）：测试 → gitleaks → git 提交推送 → 服务器同步重启 → 线上验收 → 刷新 Cloudflare 缓存
+#   GitHub 轨（公开仓库）：只推干净代码 —— .gitignore 挡住 data/、.env 等，提交前 gitleaks 扫描暂存区，有泄漏即中止
+#   服务器轨：从工作区打包（含 gitignored 但服务器需要的文件；排除 data/ 等服务器运行时数据）上传
+# 用法：bash deploy/sync.sh [-m "提交信息"] [-y] [--server-only] [--dry-run]
+#   --server-only  跳过 git（不提交/不推送），只测试 + 同步服务器
+#   --dry-run      测试 + gitleaks 扫描 + rsync -n 预览差异；不提交、不推送、不上传、不重启
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,14 +13,27 @@ SSH_PORT=28766
 APP_DIR=/www/wwwroot/userloop
 SITE=https://nownexts.com
 CF_CREDS="$HOME/OpenFlow Dev/data/cloudflare.json"
-MSG="sync $(date '+%Y-%m-%d %H:%M')"
+MSG="chore: sync $(date '+%Y-%m-%d %H:%M')"
 ASSUME_YES=0
+SERVER_ONLY=0
+DRY_RUN=0
+
+# 长选项先剥离，剩下的交给 getopts
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --server-only) SERVER_ONLY=1 ;;
+    --dry-run)     DRY_RUN=1 ;;
+    *)             ARGS+=("$a") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 while getopts "m:y" opt; do
   case "$opt" in
     m) MSG="$OPTARG" ;;
     y) ASSUME_YES=1 ;;
-    *) echo "用法: bash deploy/sync.sh [-m 提交信息] [-y]" && exit 1 ;;
+    *) echo "用法: bash deploy/sync.sh [-m 提交信息] [-y] [--server-only] [--dry-run]" && exit 1 ;;
   esac
 done
 
@@ -25,18 +42,48 @@ step() { printf "\n\033[1;36m═══ %s ═══\033[0m\n" "$*"; }
 step "1/6 本地测试"
 .venv/bin/python -m pytest tests/ -q --tb=line | tail -1
 
-# ─── 2. git 提交推送 ───
-step "2/6 git 提交推送"
-if [ -n "$(git status --porcelain)" ]; then
-  git add -A
-  git commit -m "$MSG" | head -2
-  git push -u origin main 2>&1 | grep -E "main|up-to-date" | head -2
+# ─── 2. gitleaks + git 提交推送 ───
+GITLEAKS="${GITLEAKS:-$HOME/.local/bin/gitleaks}"
+[ -x "$GITLEAKS" ] || GITLEAKS="$(command -v gitleaks || true)"
+leak_scan() {  # $1 = staged | worktree
+  [ -n "$GITLEAKS" ] || { echo "✗ 未找到 gitleaks，拒绝提交（或用 --server-only）"; return 1; }
+  local args=(git --pre-commit --redact --no-banner); [ "$1" = staged ] && args+=(--staged)
+  "$GITLEAKS" "${args[@]}" . || {
+    echo "✗ gitleaks 发现疑似密钥，已中止（未提交/未推送/未同步）。误报请加 .gitleaksignore 或行内 gitleaks:allow"
+    return 1
+  }
+}
+
+step "2/6 gitleaks + git 提交推送"
+if [ "$SERVER_ONLY" = 1 ]; then
+  echo "--server-only：跳过 git"
+elif [ "$DRY_RUN" = 1 ]; then
+  git status --short | head -40
+  leak_scan worktree
+  echo "--dry-run：将提交「$MSG」（未提交、未推送）"
 else
-  echo "无未提交变更（跳过 commit，继续同步服务器）"
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "✗ 当前分支不是 main，已中止（或用 --server-only）"; exit 1; }
+  if [ -n "$(git status --porcelain)" ]; then
+    git add -A
+    leak_scan staged
+    git commit -m "$MSG" | head -2
+  else
+    echo "无未提交变更（跳过 commit）"
+  fi
+  git push -u origin main 2>&1 | grep -E "main|up-to-date" | head -2
 fi
 
 # ─── 3. 打包同步服务器 ───
 step "3/6 服务器同步（${HOST}:${APP_DIR}）"
+if [ "$DRY_RUN" = 1 ]; then
+  # 与下方 tar 的排除项保持一致；只预览，不写入（tar 解压只增改不删，故预览也不带 --delete）
+  rsync -azn --itemize-changes -e "ssh -p $SSH_PORT" \
+    --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
+    --exclude .pytest_cache --exclude '*.pyc' --exclude .DS_Store \
+    --exclude .gitignore --exclude .gitattributes ./ "root@$HOST:$APP_DIR/" || true
+  echo "--dry-run：仅预览，未上传、未重启、未刷新 CF"
+  exit 0
+fi
 TAR=/tmp/userloop-sync.tar.gz
 tar czf "$TAR" \
   --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
