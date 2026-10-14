@@ -5,12 +5,16 @@
 # 用法：bash deploy/sync.sh [-m "提交信息"] [-y] [--server-only] [--dry-run]
 #   --server-only  跳过 git（不提交/不推送），只测试 + 同步服务器
 #   --dry-run      测试 + gitleaks 扫描 + rsync -n 预览差异；不提交、不推送、不上传、不重启
+# 分支约束：正式部署（含 --server-only）只允许在 main 上进行；--dry-run 任意分支可跑（仅告警）
+# ops/（仓库根，使用工具产生的脚本/批次，gitignored）不进 web 目录，单独同步到 /www/ops/userloop/
+#   注意：userloop/ops/ 是产品代码，排除项必须锚定仓库根（rsync '/ops/'、bsdtar '^./ops'）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 HOST=172.96.253.73
 SSH_PORT=28766
 APP_DIR=/www/wwwroot/userloop
+OPS_DIR=/www/ops/userloop   # outside any web root; synced with --update, never --delete
 SITE=https://nownexts.com
 CF_CREDS="$HOME/OpenFlow Dev/data/cloudflare.json"
 MSG="chore: sync $(date '+%Y-%m-%d %H:%M')"
@@ -39,6 +43,25 @@ done
 
 step() { printf "\n\033[1;36m═══ %s ═══\033[0m\n" "$*"; }
 
+# Deploy only from main (dry-run: warn only)
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$BRANCH" != main ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "⚠ 当前分支 ${BRANCH}，部署只允许从 main 进行；功能分支请先合并（--dry-run 仅预览，继续）"
+  else
+    echo "✗ 当前分支 ${BRANCH}，部署只允许从 main 进行；功能分支请先合并"; exit 1
+  fi
+fi
+
+# Sync repo-root ops/ → $OPS_DIR (outside web root). Skips when ops/ is empty.
+sync_ops() {
+  [ -d ops ] && [ -n "$(ls -A ops 2>/dev/null)" ] || return 0
+  local n=(); [ "$DRY_RUN" = 1 ] && n=(-n --itemize-changes)
+  echo "ops/ → ${HOST}:${OPS_DIR}/（--update，只增不删）"
+  rsync -az --update ${n[@]+"${n[@]}"} --exclude .DS_Store -e "ssh -p $SSH_PORT" \
+    --rsync-path="mkdir -p ${OPS_DIR} && rsync" ./ops/ "root@$HOST:$OPS_DIR/"
+}
+
 step "1/6 本地测试"
 .venv/bin/python -m pytest tests/ -q --tb=line | tail -1
 
@@ -62,7 +85,6 @@ elif [ "$DRY_RUN" = 1 ]; then
   leak_scan worktree
   echo "--dry-run：将提交「${MSG}」（未提交、未推送）"
 else
-  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "✗ 当前分支不是 main，已中止（或用 --server-only）"; exit 1; }
   if [ -n "$(git status --porcelain)" ]; then
     git add -A
     leak_scan staged
@@ -82,7 +104,8 @@ if [ "$DRY_RUN" = 1 ]; then
     --exclude .pytest_cache --exclude '*.pyc' --exclude .DS_Store \
     --exclude .gitignore --exclude .gitattributes \
     --exclude '.env' --exclude '.env.*' --exclude '*.db' --exclude '*.sqlite*' --exclude '*.log' \
-    --exclude CLAUDE.md --exclude AGENTS.md --exclude .gitleaksignore ./ "root@$HOST:$APP_DIR/" || true
+    --exclude CLAUDE.md --exclude AGENTS.md --exclude .gitleaksignore --exclude '/ops/' ./ "root@$HOST:$APP_DIR/" || true
+  sync_ops || true
   echo "--dry-run：仅预览，未上传、未重启、未刷新 CF"
   exit 0
 fi
@@ -92,8 +115,9 @@ COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$TAR" \
   --exclude .pytest_cache --exclude '*.pyc' --exclude .DS_Store \
   --exclude .gitignore --exclude .gitattributes \
   --exclude '.env' --exclude '.env.*' --exclude '*.db' --exclude '*.sqlite*' --exclude '*.log' \
-  --exclude CLAUDE.md --exclude AGENTS.md --exclude .gitleaksignore .
+  --exclude CLAUDE.md --exclude AGENTS.md --exclude .gitleaksignore --exclude '^./ops' .
 scp -P "$SSH_PORT" -q "$TAR" "root@$HOST:/tmp/userloop-sync.tar.gz"
+sync_ops
 
 # ─── 4. 解压 + 重启 + 远端测试 ───
 step "4/6 服务器重启 + 远端测试"

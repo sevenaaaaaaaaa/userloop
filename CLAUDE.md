@@ -58,7 +58,19 @@ bash deploy/install-server.sh                  # 首次安装服务器
 ```
 
 - 分支：`main`；无 GitHub Actions，由手动执行 `deploy/sync.sh` 触发
+- 只允许从 `main` 部署（`sync.sh` 含 `--server-only`、`release.sh` 均拒绝其他分支；`--dry-run` 仅告警）
+- 仓库根 `ops/` 不随 tar 进 web 目录，单独同步到 `/www/ops/userloop/`（注意 `userloop/ops/` 是产品代码，排除项须锚定根目录）
 - 服务器约定详见 `deploy/server.md`
+
+## 开发工具 vs 使用工具（硬性规则）
+
+| 类别 | 例子 | 放哪 | GitHub | 服务器 |
+|---|---|---|---|---|
+| 开发工具（产品代码） | 源码、测试、部署脚本、文档 | 原目录 | ✅ | ✅（部署同步） |
+| 使用工具的产物 | 用 UserLoop 干活时写的批处理/一次性修复脚本、批次文件、导出数据 | **`ops/`** | ❌ | ✅ 仅 `/www/ops/userloop/`（web 根之外，`--update` 只增不删） |
+
+- `/ops/` 已 gitignore；`deploy/sync.sh` 把 `ops/` 单独同步到服务器 `/www/ops/userloop/`（不进 web 根、不进 GitHub；`ops/` 为空时跳过）。
+- 拿不准时按第二类处理（放 `ops/`，不进 GitHub），再问用户。
 
 ## 注意事项
 

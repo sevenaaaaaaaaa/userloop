@@ -18,3 +18,7 @@ cloudflare.json
 cf.env
 secrets-local.md
 .deploy-ssh/
+
+# Tool-usage workspace: scripts/batches/data produced while *using* UserLoop.
+# Never on GitHub; deploy/sync.sh pushes it to the server only (/www/ops/userloop/).
+/ops/

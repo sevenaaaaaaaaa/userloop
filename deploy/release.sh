@@ -5,6 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VER="${1:?用法: bash deploy/release.sh <version> <summary>}"
 SUMMARY="${2:?需要变更摘要}"
+# Release only from main (checked before touching VERSION/CHANGELOG)
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+[ "$BRANCH" = main ] || { echo "✗ 当前分支 ${BRANCH}，部署只允许从 main 进行；功能分支请先合并"; exit 1; }
 DATE=$(date '+%Y-%m-%d')
 echo "$VER" > VERSION
 python3 - "$VER" "$DATE" "$SUMMARY" <<'PYEOF'
