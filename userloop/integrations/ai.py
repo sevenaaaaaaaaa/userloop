@@ -31,12 +31,25 @@ def _client(cfg: dict, transport: Any = None) -> httpx.AsyncClient:
 
 async def chat(ctx: ExecutorContext, messages: list[dict], model: str | None = None,
                transport: Any = None, max_tokens: int | None = None,
-               json_mode: bool = True) -> dict[str, Any]:
-    """OpenAI 兼容 chat/completions 调用，返回 {ok, content, model, error}。"""
+               json_mode: bool = True, caller: str = "") -> dict[str, Any]:
+    """OpenAI 兼容 chat/completions 调用，返回 {ok, content, model, error}。
+
+    成本护栏：调用前过日预算 + 调用方 token 上限门（超限降级，调用方按不可用处理）；
+    调用成功后按实际 usage 记账（token_usage 表：日/小时/调用方三维）。
+    """
     cfg = (ctx.config.get("ai") or {})
     key = cfg.get("api_key")
     if not key:
         return {"ok": False, "error": "ai.api_key not configured", "dry_run": True}
+    store = getattr(ctx, "store", None)
+    if store is not None:
+        from userloop.billing import tokens as token_billing
+
+        g = await token_billing.gate(store, ctx.config, caller=caller)
+        if not g.get("ok"):
+            return {"ok": False, "error": g.get("reason", "budget gate"),
+                    "budget_exceeded": bool(g.get("budget_exceeded")),
+                    "cap_exceeded": bool(g.get("cap_exceeded")), "degraded": True}
     body: dict[str, Any] = {
         "model": model or cfg.get("model", "deepseek-chat"),
         "messages": messages,
@@ -54,7 +67,16 @@ async def chat(ctx: ExecutorContext, messages: list[dict], model: str | None = N
             return {"ok": False, "error": f"HTTP {resp.status_code}", "status_code": resp.status_code}
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
-        return {"ok": True, "content": content, "model": data.get("model")}
+        used_model = str(data.get("model") or "")
+        usage = data.get("usage") or {}
+        if store is not None:
+            from userloop.billing import tokens as token_billing
+
+            await token_billing.record(
+                store, ctx.config, caller=caller or "unknown", model=used_model,
+                prompt_tokens=int(usage.get("prompt_tokens") or 0),
+                completion_tokens=int(usage.get("completion_tokens") or 0))
+        return {"ok": True, "content": content, "model": used_model}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
@@ -96,7 +118,8 @@ async def execute(ctx: ExecutorContext, action: dict, loop: dict, user: dict) ->
     cfg = (ctx.config.get("ai") or {})
     result: dict[str, Any] = {"type": atype, "provider": cfg.get("base_url", "deepseek")}
 
-    generated = await chat(ctx, build_messages(ctx, action, loop, user), transport=payload.get("_transport"))
+    generated = await chat(ctx, build_messages(ctx, action, loop, user),
+                           transport=payload.get("_transport"), caller="ai_email")
     if not generated.get("ok"):
         # 未配 key / 调用失败 → 降级为模板文案发送（闭环不断）
         result.update(ok=True, degraded=True,

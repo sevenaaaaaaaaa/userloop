@@ -60,7 +60,7 @@ if [ "$SERVER_ONLY" = 1 ]; then
 elif [ "$DRY_RUN" = 1 ]; then
   git status --short | head -40
   leak_scan worktree
-  echo "--dry-run：将提交「$MSG」（未提交、未推送）"
+  echo "--dry-run：将提交「${MSG}」（未提交、未推送）"
 else
   [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "✗ 当前分支不是 main，已中止（或用 --server-only）"; exit 1; }
   if [ -n "$(git status --porcelain)" ]; then
@@ -80,7 +80,9 @@ if [ "$DRY_RUN" = 1 ]; then
   rsync -azn --itemize-changes -e "ssh -p $SSH_PORT" \
     --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
     --exclude .pytest_cache --exclude '*.pyc' --exclude .DS_Store \
-    --exclude .gitignore --exclude .gitattributes ./ "root@$HOST:$APP_DIR/" || true
+    --exclude .gitignore --exclude .gitattributes \
+    --exclude '.env' --exclude '.env.*' --exclude '*.db' --exclude '*.sqlite*' --exclude '*.log' \
+    --exclude CLAUDE.md --exclude AGENTS.md --exclude .gitleaksignore ./ "root@$HOST:$APP_DIR/" || true
   echo "--dry-run：仅预览，未上传、未重启、未刷新 CF"
   exit 0
 fi
@@ -88,7 +90,9 @@ TAR=/tmp/userloop-sync.tar.gz
 tar czf "$TAR" \
   --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
   --exclude .pytest_cache --exclude '*.pyc' --exclude .DS_Store \
-  --exclude .gitignore --exclude .gitattributes .
+  --exclude .gitignore --exclude .gitattributes \
+  --exclude '.env' --exclude '.env.*' --exclude '*.db' --exclude '*.sqlite*' --exclude '*.log' \
+  --exclude CLAUDE.md --exclude AGENTS.md --exclude .gitleaksignore .
 scp -P "$SSH_PORT" -q "$TAR" "root@$HOST:/tmp/userloop-sync.tar.gz"
 
 # ─── 4. 解压 + 重启 + 远端测试 ───
@@ -138,7 +142,7 @@ if [ -f "$CF_CREDS" ]; then
     --data "$PURGE_URLS")
   echo "$CF_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print('CF 刷新:', '成功' if d.get('success') else d.get('errors'))"
 else
-  echo "（未找到 $CF_CREDS，跳过 CF 刷新）"
+  echo "（未找到 ${CF_CREDS}，跳过 CF 刷新）"
 fi
 echo "（CF 已按 URL 定向刷新；API 失败时可用 $CF_CREDS 凭据手动 purge_everything）"
 

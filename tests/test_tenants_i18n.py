@@ -66,14 +66,19 @@ def test_tenant_api_create_switch_and_permissions(tmp_path) -> None:
         assert client.post("/api/v1/tenants/switch", json={"id": "acme"}).status_code == 403
 
 
-async def test_scheduler_runs_per_tenant(tmp_path) -> None:
+async def test_scheduler_runs_per_tenant(tmp_path, monkeypatch) -> None:
     from userloop.actions.executors import ExecutorContext
     from userloop.core.scheduler import run_all_tenants
+    from userloop.ops import workdays
 
     ts = TenantStores({"data_dir": str(tmp_path), "storage": {}})
     ts.registry.create("t2", name="T2")
     await ts.close_all()
     ctx = ExecutorContext(str(tmp_path), {"data_dir": str(tmp_path), "storage": {}})
+    # 绕过执行日历（本测试只验证按租户分发；日历门禁另有专测）
+    monkeypatch.setattr(workdays, "job_allowed",
+                        lambda cfg, job, now=None: {"allowed": True, "important": True,
+                                                    "reason": "", "deadline_s": None})
     out = await run_all_tenants(ctx, "predict")     # 轻量任务：预测重算
     assert {"main", "t2"} <= set(out)
 

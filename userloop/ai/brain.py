@@ -187,7 +187,7 @@ async def decide(ctx: ExecutorContext, context: dict, transport: Any = None) -> 
     brain = cfg.get("brain") or {}
     msgs = [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
-    out = await chat(ctx, msgs, model=brain.get("model"), transport=transport)
+    out = await chat(ctx, msgs, model=brain.get("model"), transport=transport, caller="brain")
     if not out.get("ok"):
         return {"intent": "noop", "reasoning": f"ai unavailable: {out.get('error')}", "confidence": 0,
                 "degraded": True, "model": None}

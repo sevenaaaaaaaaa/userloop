@@ -282,7 +282,7 @@ async def propose(store: Store, ctx: ExecutorContext, telemetry: dict | None = N
     lang = _t("ai.language", ctx.config.get("locale") or "zh-CN")
     res = await chat(ctx, [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
                            {"role": "user", "content": payload}],
-                     transport=transport, max_tokens=1200)
+                     transport=transport, max_tokens=1200, caller="evolve")
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error") or "AI 不可用", "degraded": True}
 

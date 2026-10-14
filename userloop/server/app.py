@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -1814,6 +1815,55 @@ def create_app(data_dir: str | None = None) -> Any:
         from userloop.billing import meter as billing
 
         return JSONResponse(await billing.snapshot(store, ctx))
+
+    @app.get(f"{prefix}/api/v1/billing/tokens")
+    async def billing_tokens(days: int = 7) -> JSONResponse:
+        """成本与任务面板单一端点：运行中任务 + token 日/小时记录 + 消耗大户 + 预算水位。"""
+        from userloop.billing import tokens as token_billing
+
+        # 运行中的自动化任务
+        running_loops = (await store.count_loops_by_status()).get("running", 0)
+        campaigns = await store.list_campaigns(limit=100)
+        running_campaigns = sum(1 for c in campaigns if c.get("status") in ("running", "planning",
+                                                                            "pending_approval"))
+        cur = await store.db.execute(
+            "SELECT COUNT(*) c FROM actions WHERE status='pending' AND scheduled_at<=?",
+            (iso_now(),))  # type: ignore[union-attr]
+        pending_actions = int((await cur.fetchone())["c"])
+        day = datetime.utcnow().date().isoformat()
+        running = {"loops_running": running_loops, "campaigns_active": running_campaigns,
+                   "pending_actions": pending_actions}
+        return JSONResponse({
+            "running": running,
+            "budget": await token_billing.budget_status(store, cfg),
+            "daily": await store.token_usage_daily(days=max(1, min(days, 30))),
+            "hourly": await store.token_usage_hourly(day),
+            "top_callers": await store.token_usage_top_callers(limit=10),
+            "caller_caps": {**token_billing.DEFAULT_CALLER_CAPS,
+                            **((cfg.get("ai") or {}).get("caller_caps") or {})},
+        })
+
+    @app.post(f"{prefix}/api/v1/billing/budget")
+    async def billing_budget_add(request: Request) -> JSONResponse:
+        """管理员单日追加预算（第二天自动回落到默认日预算）。"""
+        user = _user(request) or {}
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="仅管理员可调整预算")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            extra = float(body.get("extra_cny"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="extra_cny 必须是数字（元）")
+        if extra < 0 or extra > 10000:
+            raise HTTPException(status_code=400, detail="追加额需在 0–10000 元之间")
+        from userloop.billing import tokens as token_billing
+
+        day = datetime.utcnow().date().isoformat()
+        await store.set_budget_override(day, extra, note=str(body.get("note") or ""))
+        return JSONResponse({"ok": True, **await token_billing.budget_status(store, cfg)})
 
     @app.get(f"{prefix}/api/v1/platform")
     async def platform_summary() -> JSONResponse:

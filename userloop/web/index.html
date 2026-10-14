@@ -93,6 +93,11 @@
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       插件与计费
     </a>
+    <a class="nv" href="#sec-cost" data-sec="sec-cost">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1-1.8 2.5-1.8s2.5.8 2.5 1.8-1 1.6-2.5 2-2.5 1-2.5 2 1 1.8 2.5 1.8 2.5-.8 2.5-1.8"/></svg>
+      成本与任务
+      <span class="bd" id="bd-cost"></span>
+    </a>
     <a class="nv" href="#sec-eco" data-sec="sec-eco">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 7l3 3M17 7l-3 3M7 17l3-3M17 17l-3-3"/></svg>
       生态互联
@@ -330,6 +335,46 @@
       </div>
     </section>
 
+    <section id="sec-cost">
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>正在运行的自动化任务</h3><span class="p-sub" id="costRunSub">—</span>
+            <button class="btn ghost sm" onclick="costLoad(true)">刷新</button></div>
+          <div class="p-body"><div class="kpi-grid" id="costRunKpis" style="grid-template-columns:repeat(3,1fr)"></div></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>今日 AI 预算</h3><span class="p-sub">超过日预算自动邮件提醒管理员 · 超支后 AI 调用降级</span></div>
+          <div class="p-body">
+            <div id="costBudgetBar"></div>
+            <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input id="costExtra" class="code" style="width:110px;min-height:34px" placeholder="追加金额(元)" inputmode="decimal" />
+              <button class="btn primary sm" onclick="costAddBudget()">今日追加预算</button>
+              <span class="mono" style="color:var(--faint)">第二天自动回落到默认预算</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>Token 消耗 · 每小时（今日）</h3><span class="p-sub">按 UTC 小时聚合</span></div>
+          <div class="p-body"><table><thead><tr><th>小时</th><th>tokens</th><th>成本(元)</th><th>调用</th></tr></thead><tbody id="costHourly"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="p-head"><h3>Token 消耗 · 每日（近 7 天）</h3><span class="p-sub">成本按配置单价估算</span></div>
+          <div class="p-body"><table><thead><tr><th>日期</th><th>tokens</th><th>成本(元)</th><th>调用</th></tr></thead><tbody id="costDaily"></tbody></table></div>
+        </div>
+      </div>
+      <div class="panels p2">
+        <div class="panel">
+          <div class="p-head"><h3>消耗大户（今日）</h3><span class="p-sub">按调用方聚合 · 超日上限自动降级</span></div>
+          <div class="p-body">
+            <table><thead><tr><th>调用方</th><th>tokens</th><th>成本(元)</th><th>调用</th><th>日上限</th><th>最近</th></tr></thead><tbody id="costTop"></tbody></table>
+            <div id="costAdvice" style="margin-top:10px;font-size:var(--fs-md);color:var(--muted)"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="sec-eco">
       <div class="panels p2">
         <div class="panel">
@@ -425,10 +470,12 @@ function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('sho
 const UL_I18N = {
   'zh-CN': {overview:'运营总览', journey:'旅程漏斗', loops:'Loop 运行', users:'用户档案', events:'事件流',
             copilot:'Copilot 建流程', ai:'AI 大脑', predict:'预测洞察', segments:'智能分群',
-            report:'运营周报', ab:'A/B 实验', canvas:'画布编排', agents:'Agent 团队', platform:'插件与计费'},
+            report:'运营周报', ab:'A/B 实验', canvas:'画布编排', agents:'Agent 团队', platform:'插件与计费',
+            cost:'成本与任务'},
   'en-US': {overview:'Overview', journey:'Journey', loops:'Loops', users:'Users', events:'Events',
             copilot:'Copilot', ai:'AI Brain', predict:'Predictions', segments:'Segments',
-            report:'Weekly Report', ab:'A/B Tests', canvas:'Canvas', agents:'Agent Team', platform:'Plugins'},
+            report:'Weekly Report', ab:'A/B Tests', canvas:'Canvas', agents:'Agent Team', platform:'Plugins',
+            cost:'Cost & Tasks'},
 };
 function currentLang(){ try { return localStorage.getItem('ul_lang') || 'zh-CN'; } catch(e){ return 'zh-CN'; } }
 function toggleLang(){
@@ -450,7 +497,8 @@ function applyLang(){
                ['#sidebar a.nv[data-sec=\'sec-segments\']','segments'], ['#sidebar a.nv[data-sec=\'sec-report\']','report'],
                ['#sidebar a.nv[data-sec=\'sec-ab\']','ab'],
                ['#sidebar a.nv[data-sec=\'sec-agents\']','agents'],
-               ['#sidebar a.nv[data-sec=\'sec-platform\']','platform']];
+               ['#sidebar a.nv[data-sec=\'sec-platform\']','platform'],
+               ['#sidebar a.nv[data-sec=\'sec-cost\']','cost']];
   map.forEach(([sel, key])=>{
     const el = document.querySelector(sel);
     if (!el) return;
@@ -1048,6 +1096,65 @@ async function pfLoad(){
       || '<tr><td colspan="4" style="color:var(--faint)">暂无计量</td></tr>';
   }catch(e){ $('pfPlugins').innerHTML = `<tr><td colspan="4">${esc(e.message)}</td></tr>`; }
 }
+const COST_TIPS = {
+  brain: 'AI 大脑批次决策量最大；可在 config 调小 ai.brain.batch_size 或拉长调度间隔',
+  copilot: 'Copilot 单次生成 max_tokens=1200，属正常大头；限制高频手工重试即可',
+  conversation: '对话式触达按消息计；建议加长上下文裁剪或降低回复 max_tokens',
+  segments: '智能分群每次一句话建群；如频繁调用可保存分群复用，避免重复生成',
+  report: '周报/简报叙事生成；已限频（每周/每日两次），无需额外处理',
+  evolve: '自进化诊断与提案；默认每周一次，出现高频消耗说明被手动重复触发',
+  ai_email: 'AI 个性化邮件文案；可关闭 ai.email 改用模板文案（自动降级）',
+  unknown: '未标注调用方的旧调用；升级后新数据会带调用方标记',
+};
+async function costLoad(refresh){
+  try{
+    const r = await j('api/v1/billing/tokens' + (refresh ? '?days=7' : ''));
+    const run = r.running || {}, b = r.budget || {};
+    $('bd-cost').textContent = (b.used ?? '') ? (b.used + '元') : '';
+    $('costRunSub').textContent = `Loop / Agent 战役 / 待执行动作 · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+    $('costRunKpis').innerHTML = `
+      <div class="kpi"><div class="k-label">运行中 Loop</div><div class="k-val">${run.loops_running??0}</div><div class="k-sub">pending/running 状态</div></div>
+      <div class="kpi"><div class="k-label">Agent 战役</div><div class="k-val">${run.campaigns_active??0}</div><div class="k-sub">排队/审批/执行中</div></div>
+      <div class="kpi"><div class="k-label">待执行动作</div><div class="k-val">${run.pending_actions??0}</div><div class="k-sub">已到期等待调度</div></div>`;
+    const pct = Math.min(100, b.pct||0);
+    const barCls = b.exceeded ? 'var(--danger)' : pct>=80 ? 'var(--warn)' : 'var(--ok)';
+    $('costBudgetBar').innerHTML = `
+      <div class="fn-row"><div class="fn-l">今日成本</div><div class="fn-t"><div class="fn-f" style="width:${pct}%;background:${barCls}"></div></div><div class="fn-n">${b.used??0} / ${b.limit??0} 元</div></div>
+      ${b.extra>0?`<div style="font-size:var(--fs-md);color:var(--muted)">含单日追加 ${b.extra} 元（次日自动回落）</div>`:''}
+      ${b.exceeded?`<div style="font-size:var(--fs-md);color:var(--danger);margin-top:6px">⚠ 已超支：新 AI 调用自动降级，已邮件提醒管理员</div>`:''}`;
+    const hrs = r.hourly || [];
+    $('costHourly').innerHTML = hrs.length ? hrs.map(h=>`
+      <tr><td class="mono nw">${String(h.hour).padStart(2,'0')}:00–${String(h.hour).padStart(2,'0')}:59</td>
+      <td class="mono">${h.tokens}</td><td class="mono">${h.cost}</td><td class="mono">${h.calls}</td></tr>`).join('')
+      : '<tr><td colspan="4" style="color:var(--faint)">今日暂无 AI 调用</td></tr>';
+    const dly = r.daily || [];
+    $('costDaily').innerHTML = dly.length ? dly.map(d=>`
+      <tr><td class="mono nw">${esc(d.day)}</td><td class="mono">${d.tokens}</td><td class="mono">${d.cost}</td><td class="mono">${d.calls}</td></tr>`).join('')
+      : '<tr><td colspan="4" style="color:var(--faint)">暂无消耗记录</td></tr>';
+    const caps = r.caller_caps || {};
+    $('costTop').innerHTML = (r.top_callers||[]).length ? (r.top_callers||[]).map(c=>{
+      const cap = caps[c.caller] || 100000;
+      const over = c.tokens >= cap;
+      return `<tr><td class="mono">${esc(c.caller)}</td><td class="mono">${c.tokens}</td>
+        <td class="mono">${c.cost}</td><td class="mono">${c.calls}</td>
+        <td class="mono">${over?'<span class="tag danger">已达上限</span> ':''}${cap}</td>
+        <td class="mono" style="color:var(--faint)">${esc(fmt(c.last_at))}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" style="color:var(--faint)">今日暂无消耗</td></tr>';
+    const top = (r.top_callers||[])[0];
+    $('costAdvice').innerHTML = top
+      ? `💡 优化建议：<b>${esc(top.caller)}</b> 是今日最大消耗方（${top.tokens} tokens / ${top.cost} 元）。${esc(COST_TIPS[top.caller]||COST_TIPS.unknown)}；也可在 config 的 <span class="mono">ai.caller_caps</span> 收紧其日上限。`
+      : '';
+  }catch(e){ $('costRunSub').textContent = '加载失败：' + e.message; }
+}
+async function costAddBudget(){
+  const v = parseFloat($('costExtra').value);
+  if (!(v > 0)) { toast('先输入追加金额（元）'); return; }
+  const r = await (await fetch('api/v1/billing/budget', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({extra_cny: v})})).json();
+  if (r.ok) { toast(`今日预算已调整为 ${r.limit} 元，明天自动回落到 ${r.base_limit} 元`); $('costExtra').value=''; }
+  else toast('失败：' + (r.detail || r.error || '未知错误'));
+  costLoad(true);
+}
 function schedule(){ setTimeout(async ()=>{ if(!document.hidden) await load(); schedule(); }, pollMs); }
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
 
@@ -1088,6 +1195,7 @@ function setupLazy(){
   lazyLoad('sec-assets', asLoad);
   lazyLoad('sec-agents', agLoad);
   lazyLoad('sec-platform', pfLoad);
+  lazyLoad('sec-cost', costLoad);
   lazyLoad('sec-ops', opsLoad);
 }
 // 兜底：总览异常时也保证面板可加载

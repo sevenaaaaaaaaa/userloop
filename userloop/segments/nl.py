@@ -75,7 +75,7 @@ async def draft(ctx: ExecutorContext, prompt: str, transport: Any = None) -> dic
     lang = _t("ai.language", ctx.config.get("locale") or "zh-CN")
     res = await chat(ctx, [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
                            {"role": "user", "content": f"需求：{prompt}"}],
-                     transport=transport, max_tokens=600)
+                     transport=transport, max_tokens=600, caller="segments")
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error") or "AI 不可用", "degraded": True}
     try:

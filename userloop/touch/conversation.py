@@ -90,7 +90,7 @@ async def _generate_reply(store: Store, ctx: ExecutorContext, user: dict, channe
     try:
         from userloop.integrations.ai import chat
 
-        res = await chat(ctx, msgs, transport=transport, max_tokens=400, json_mode=False)
+        res = await chat(ctx, msgs, transport=transport, max_tokens=400, json_mode=False, caller="conversation")
         if res.get("ok") and str(res.get("content") or "").strip():
             return str(res["content"]).strip()[:800], False
         return "已收到你的消息，我们会尽快跟进。", True

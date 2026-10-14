@@ -173,6 +173,19 @@ async def weekly_report(store: Store, ctx: ExecutorContext) -> dict:
     return {"name": rep["name"], "path": path, "degraded": rep["degraded"], "sent": sent}
 
 
+async def run_digest(store: Store, ctx: ExecutorContext) -> dict:
+    """清晨/傍晚运营简报邮件：过去 12 小时执行/流量/转化 + 当日任务与 token 消耗。
+
+    简报是「报告」不是「任务」：周末节假日照常发送（用户要求每天两次）。
+    本地 12 点前算清晨档，之后算傍晚档。
+    """
+    ctx.store = store
+    from userloop.ops import digest
+
+    variant = "morning" if digest.local_hour(ctx.config) < 12 else "evening"
+    return await digest.send_digest(store, ctx, variant=variant)
+
+
 async def run_ai_brain(store: Store, ctx: ExecutorContext) -> list[dict]:
     """AI 大脑批次任务（频次受限：默认每 30 分钟一批，每批成本有界）。"""
     ctx.store = store
@@ -186,7 +199,35 @@ async def run_ai_brain(store: Store, ctx: ExecutorContext) -> list[dict]:
 
 
 async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
-    """按租户遍历执行调度任务（每租户独立数据，互不影响；单租户失败不阻塞其他）。"""
+    """按租户遍历执行调度任务（每租户独立数据，互不影响；单租户失败不阻塞其他）。
+
+    执行日历（ops/workdays）：周六日/节假日不执行；非重要任务锁定本地 00:00–06:00
+    夜间窗口并带硬截止（06:00 前必须结束）。简报（digest）每日照发，不参与门禁。
+    """
+    import asyncio as _asyncio
+
+    from userloop.ops import workdays
+
+    if job != "digest":
+        gate = workdays.job_allowed(ctx.config, job)
+        if not gate.get("allowed"):
+            return {"skipped": gate.get("reason")}
+
+    async def _run() -> dict:
+        return await _run_all_tenants(ctx, job)
+
+    deadline = workdays.job_allowed(ctx.config, job).get("deadline_s") if job != "digest" else None
+    try:
+        if deadline is not None:
+            # 夜间任务硬截止：本地 06:00 一到立即取消，保证早晨六点前一定结束
+            return await _asyncio.wait_for(_run(), timeout=deadline)
+        return await _run()
+    except _asyncio.TimeoutError:
+        _observe_job(job, _utcnow(), False)
+        return {"skipped": f"夜间窗口硬截止（本地 06:00），任务 {job} 被强制收尾"}
+
+
+async def _run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
     from userloop.core.tenants import DEFAULT_TENANT, TenantStores, tenant_config
 
     _t0 = _utcnow()
@@ -236,6 +277,8 @@ async def run_all_tenants(ctx: ExecutorContext, job: str) -> dict:
                 out[tid] = {k: await mdl.train(st, tcfg["data_dir"], k) for k in ("churn", "propensity")}
             elif job == "report":
                 out[tid] = await weekly_report(st, tctx)
+            elif job == "digest":
+                out[tid] = await run_digest(st, tctx)
             elif job == "inflow":
                 from userloop.integrations import inflow
 
@@ -361,4 +404,15 @@ def build_scheduler(store: Store, ctx: ExecutorContext):
                   args=[ctx, "backup"], id="backup", max_instances=1, coalesce=True)
     sched.add_job(run_all_tenants, "interval", minutes=10, args=[ctx, "alerts"], id="alerts",
                   max_instances=1, coalesce=True)
+    # 执行日历（ops/workdays）：run_all_tenants 内统一门禁——
+    #   周六日/节假日全部跳过；非重要任务（prune/ai_brain/predict/train/backup/报告等）
+    #   只在本地 00:00–06:00 启动并带 06:00 硬截止。无需改这里的触发频率。
+    # 每日简报：本地 08:00 / 18:00 邮件推送（简报不算任务，周末节假日照发）
+    from userloop.ops import workdays as _wd
+
+    tz = int(_wd._cfg(ctx.config)["tz_offset_hours"]) % 24
+    sched.add_job(run_all_tenants, CronTrigger(hour=(8 - tz) % 24, minute=5, timezone="UTC"),
+                  args=[ctx, "digest"], id="digest_morning", max_instances=1, coalesce=True)
+    sched.add_job(run_all_tenants, CronTrigger(hour=(18 - tz) % 24, minute=5, timezone="UTC"),
+                  args=[ctx, "digest"], id="digest_evening", max_instances=1, coalesce=True)
     return sched

@@ -157,7 +157,7 @@ async def build(store: Store, ctx: ExecutorContext, days: int | None = None,
         lang = _t("ai.language", ctx.config.get("locale") or "zh-CN")
         res = await chat(ctx, [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
                                {"role": "user", "content": _stats_brief(stats)}],
-                         transport=transport, max_tokens=900, json_mode=False)
+                         transport=transport, max_tokens=900, json_mode=False, caller="report")
         if res.get("ok"):
             narrative = str(res.get("content") or "").strip()
         else:

@@ -361,6 +361,27 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     quantity INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, meter)
 );
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    day TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    caller TEXT NOT NULL DEFAULT 'unknown',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_cny REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_day ON token_usage(day, hour);
+CREATE INDEX IF NOT EXISTS idx_token_usage_caller ON token_usage(day, caller);
+
+CREATE TABLE IF NOT EXISTS budget_override (
+    day TEXT PRIMARY KEY,
+    extra_cny REAL NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -1553,6 +1574,77 @@ class Store:
             return {meter: int(row["quantity"]) if row else 0}
         cur = await self.db.execute("SELECT meter, quantity FROM usage_ledger WHERE day=?", (day,))
         return {r["meter"]: int(r["quantity"]) for r in await cur.fetchall()}
+
+    # ---- token 用量与预算（成本可观测 + 日预算门禁）----
+
+    async def add_token_usage(self, caller: str, model: str, prompt_tokens: int,
+                              completion_tokens: int, cost_cny: float,
+                              ts: str, day: str, hour: int) -> None:
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO token_usage (ts, day, hour, caller, model, prompt_tokens, completion_tokens, cost_cny) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (ts, day, int(hour), caller, model, int(prompt_tokens), int(completion_tokens), float(cost_cny)))
+
+    async def token_usage_daily(self, days: int = 7) -> list[dict]:
+        """按日聚合：token 数、成本、调用次数。"""
+        assert self.db
+        cur = await self.db.execute(
+            "SELECT day, SUM(prompt_tokens+completion_tokens) tokens, SUM(cost_cny) cost, COUNT(*) calls "
+            "FROM token_usage GROUP BY day ORDER BY day DESC LIMIT ?", (int(days),))
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            for k in ("tokens", "cost", "calls"):
+                r[k] = round(float(r[k] or 0), 4 if k == "cost" else 0)
+        return rows
+
+    async def token_usage_hourly(self, day: str | None = None) -> list[dict]:
+        """按小时聚合（默认当天，UTC 日界）。"""
+        assert self.db
+        d = day or datetime.utcnow().date().isoformat()
+        cur = await self.db.execute(
+            "SELECT hour, SUM(prompt_tokens+completion_tokens) tokens, SUM(cost_cny) cost, COUNT(*) calls "
+            "FROM token_usage WHERE day=? GROUP BY hour ORDER BY hour", (d,))
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            for k in ("tokens", "cost", "calls"):
+                r[k] = round(float(r[k] or 0), 4 if k == "cost" else 0)
+        return rows
+
+    async def token_usage_top_callers(self, day: str | None = None, limit: int = 10) -> list[dict]:
+        """消耗大户：按成本排序的调用方。"""
+        assert self.db
+        d = day or datetime.utcnow().date().isoformat()
+        cur = await self.db.execute(
+            "SELECT caller, SUM(prompt_tokens) prompt_tokens, SUM(completion_tokens) completion_tokens, "
+            "SUM(prompt_tokens+completion_tokens) tokens, SUM(cost_cny) cost, COUNT(*) calls, MAX(ts) last_at "
+            "FROM token_usage WHERE day=? GROUP BY caller ORDER BY cost DESC LIMIT ?", (d, int(limit)))
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            for k in ("tokens", "cost", "calls", "prompt_tokens", "completion_tokens"):
+                r[k] = round(float(r[k] or 0), 4 if k == "cost" else 0)
+        return rows
+
+    async def token_cost_today(self) -> float:
+        assert self.db
+        day = datetime.utcnow().date().isoformat()
+        cur = await self.db.execute("SELECT COALESCE(SUM(cost_cny),0) c FROM token_usage WHERE day=?", (day,))
+        return float((await cur.fetchone())["c"])
+
+    async def set_budget_override(self, day: str, extra_cny: float, note: str = "") -> dict:
+        """单日预算追加（按日存储：第二天自然回落到默认预算）。"""
+        assert self.db
+        await self.db.execute(
+            "INSERT INTO budget_override (day, extra_cny, note, created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(day) DO UPDATE SET extra_cny=excluded.extra_cny, note=excluded.note",
+            (day, float(extra_cny), note[:200], iso_now()))
+        return {"day": day, "extra_cny": float(extra_cny), "note": note}
+
+    async def get_budget_override(self, day: str) -> float:
+        assert self.db
+        cur = await self.db.execute("SELECT extra_cny FROM budget_override WHERE day=?", (day,))
+        row = await cur.fetchone()
+        return float(row["extra_cny"]) if row else 0.0
 
 
 def iso_now() -> str:

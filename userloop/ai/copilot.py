@@ -150,7 +150,7 @@ async def draft_loop(ctx: ExecutorContext, prompt: str, transport: Any = None) -
     msgs = [{"role": "system", "content": SYSTEM + f"\n\n输出语言要求：{lang}"},
             {"role": "user", "content": f"需求：{prompt}"}]
     # 流程 JSON 较长：给足输出预算，避免被截断成非法 JSON
-    res = await chat(ctx, msgs, transport=transport, max_tokens=1200)
+    res = await chat(ctx, msgs, transport=transport, max_tokens=1200, caller="copilot")
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error") or "AI 不可用", "degraded": True}
     raw = _loads_lenient(res.get("content") or "")
