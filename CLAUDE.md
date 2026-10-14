@@ -46,7 +46,7 @@ build：无单独构建步骤。
 - **双轨同步，唯一入口 `deploy/sync.sh`**（本地 pytest → gitleaks → `git add -A` 提交并 push `main` → tar+scp 上传 → 解压重启 → 远端 pytest → 线上验收 → CF 缓存刷新）：
   - GitHub 轨（公开仓库）：只推干净代码。`.gitignore` 挡住 `data/`、`.env*`、`*.db`、`*.log`、密钥文件等；`git add -A` 后 gitleaks 扫描暂存区，发现泄漏即中止
   - 服务器轨：从工作区打包（排除 `.venv`/`data`/`.git` 等，解压只增改不删），服务器运行时数据不受影响
-  - 运维脚本不再硬编码凭据：`deploy/rebuild-config.sh` 读 `USERLOOP_AI_API_KEY`（缺省沿用旧 config 的 `ai.api_key`），`deploy/verify-touch.sh` 读 `USERLOOP_ADMIN_USER`/`USERLOOP_ADMIN_PASSWORD`（变量名见 `.env.example`）
+  - 运维脚本不再硬编码凭据：`deploy/rebuild-config.sh` 读 `USERLOOP_AI_KEY`（缺省沿用旧 config 的 `ai.api_key`），`deploy/verify-touch.sh` 读 `USERLOOP_ADMIN_USER`/`USERLOOP_ADMIN_PASSWORD`（变量名见 `.env.example`）
   - 本地 `.git/hooks/pre-commit` 跑 gitleaks（不入库，新 clone 需自行安装）
 
 ```bash
